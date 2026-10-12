@@ -28,6 +28,7 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
+#include <stdio.h>
 #include <string.h>
 
 #include "benchmark.h"
@@ -38,28 +39,22 @@
 
 /* Private typedef -----------------------------------------------------------*/
 /* USER CODE BEGIN PTD */
-
+typedef struct BenchExpectedItem {
+    const char* name;
+    const void* fn_addr;
+    uint32_t    expected_cycles;
+    uint32_t    tolerance;
+} BenchExpectedItem;
 /* USER CODE END PTD */
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
-#define PROFILER_MAP_CAPACITY     (64U)
-#define PROFILER_STACK_DEPTH      (16U)
-#define PROFILER_CONTEXT_CAPACITY (1U)
 #define PROFILER_TX_BUFFER_SIZE   (256U)
 #define PROFILER_RX_BUFFER_SIZE   (32U)
 #define PROFILER_TX_TIMEOUT_MS    (1000U)
 #define PROFILER_DUMP_COMMAND     "prof-dump"
-
-#ifndef PROFILER_APP_TIME_MODE
-#define PROFILER_APP_TIME_MODE    (1)
-#endif
-
-#if (PROFILER_APP_TIME_MODE == 1)
-#define PROFILER_APP_TIME_MODE_VALUE PROFILER_TIME_ACTIVE
-#else
-#define PROFILER_APP_TIME_MODE_VALUE PROFILER_TIME_WALL
-#endif
+#define PROFILER_LIVE_COMMAND     "live"
+#define PROFILER_HELP_COMMAND     "help"
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -70,12 +65,21 @@
 /* Private variables ---------------------------------------------------------*/
 
 /* USER CODE BEGIN PV */
-static HashMapEntry s_profiler_map[PROFILER_MAP_CAPACITY];
-static ProfilerMetric s_profiler_metrics[PROFILER_MAP_CAPACITY];
-static ProfilerStackFrame s_profiler_stack[PROFILER_CONTEXT_CAPACITY * PROFILER_STACK_DEPTH];
-static ProfilerContext s_profiler_contexts[PROFILER_CONTEXT_CAPACITY];
 static uint8_t s_profiler_tx_buffer[PROFILER_TX_BUFFER_SIZE] __attribute__((aligned(32)));
 static uint8_t s_profiler_rx_buffer[PROFILER_RX_BUFFER_SIZE] __attribute__((aligned(32)));
+
+static const BenchExpectedItem s_bench_items[] = {
+    { "bench_exact_100_cycles",  (const void*)bench_exact_100_cycles,  103U,  5U },
+    { "bench_exact_500_cycles",  (const void*)bench_exact_500_cycles,  503U,  5U },
+    { "bench_exact_1000_cycles", (const void*)bench_exact_1000_cycles, 1003U, 5U },
+    { "bench_unrolled_poly32",   (const void*)bench_unrolled_poly32,   104U,  5U },
+    { "bench_matrix_mul_2x2",    (const void*)bench_matrix_mul_2x2,    148U,  5U },
+    { "bench_fixed_loop_sum",    (const void*)bench_fixed_loop_sum,    455U,  5U },
+    { "bench_crc8_fixed_block",  (const void*)bench_crc8_fixed_block,  4819U, 20U }
+};
+#define BENCH_ITEM_COUNT (sizeof(s_bench_items) / sizeof(s_bench_items[0]))
+
+static volatile bool g_diag_all_pass = true;
 
 void* const volatile g_bench_symbols[] = {
     (void*)bench_call_overhead,
@@ -86,23 +90,28 @@ void* const volatile g_bench_symbols[] = {
 /* Private function prototypes -----------------------------------------------*/
 void SystemClock_Config(void);
 /* USER CODE BEGIN PFP */
-static bool profiler_command_matches(const uint8_t* buffer, size_t length);
+static bool command_matches(const uint8_t* buffer, size_t length, const char* cmd);
 static bool profiler_dump_metrics(void);
+static void profiler_report_live(void);
+static bool run_diagnostics(void);
+static void update_led_indicator(bool all_pass);
 static uint32_t profiler_tick_ms(void);
 static void profiler_yield_ms(uint32_t milliseconds);
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
-static bool profiler_command_matches(const uint8_t* buffer, size_t length)
+static bool command_matches(const uint8_t* buffer, size_t length, const char* cmd)
 {
     size_t first = 0U;
     size_t last = length;
-    size_t command_length = sizeof(PROFILER_DUMP_COMMAND) - 1U;
+    size_t cmd_len;
 
-    if ((buffer == NULL) || (length > PROFILER_RX_BUFFER_SIZE)) {
+    if ((buffer == NULL) || (cmd == NULL) || (length > PROFILER_RX_BUFFER_SIZE)) {
         return false;
     }
+
+    cmd_len = strlen(cmd);
 
     while ((first < last) &&
            ((buffer[first] == (uint8_t)' ') || (buffer[first] == (uint8_t)'\t') ||
@@ -115,12 +124,12 @@ static bool profiler_command_matches(const uint8_t* buffer, size_t length)
         last--;
     }
 
-    if ((last - first) != command_length) {
+    if ((last - first) != cmd_len) {
         return false;
     }
 
-    for (size_t index = 0U; index < command_length; index++) {
-        if (buffer[first + index] != (uint8_t)PROFILER_DUMP_COMMAND[index]) {
+    for (size_t index = 0U; index < cmd_len; index++) {
+        if (buffer[first + index] != (uint8_t)cmd[index]) {
             return false;
         }
     }
@@ -139,13 +148,147 @@ static bool profiler_dump_metrics(void)
 
     profiler_stop();
     (void)profiler_transport_status();
-    success = profiler_dump(stream);
+    success = profiler_dump(stream, PROFILER_DUMP_BIN);
     if (profiler_transport_status() != PROFILER_TRANSPORT_STATUS_OK) {
         success = false;
     }
     profiler_start();
 
     return success;
+}
+
+static void profiler_report_live(void)
+{
+    const Stream* stream = profiler_transport_stream();
+    char line_buf[64];
+    int len;
+
+    if (stream == NULL) {
+        return;
+    }
+
+    profiler_stop();
+    (void)profiler_dump(stream, PROFILER_DUMP_TOP);
+
+    len = snprintf(line_buf, sizeof(line_buf),
+                   "Standalone Diag: [%s]\r\n\r\n",
+                   g_diag_all_pass ? "ALL PASS" : "FAIL");
+    if (len > 0) {
+        (void)stream_write(stream, (const uint8_t*)line_buf, (size_t)len);
+        stream_flush(stream);
+    }
+
+    profiler_start();
+}
+
+/* Standalone diagnostic measurement: does NOT need profiler dump pipeline */
+static bool run_diagnostics(void)
+{
+    bool all_pass = true;
+    static const int32_t mat_a[4] = { 1, 2, 3, 4 };
+    static const int32_t mat_b[4] = { 5, 6, 7, 8 };
+    int32_t mat_out[4] = { 0, 0, 0, 0 };
+    static const uint8_t crc_data[16] = {
+        0x01U, 0x02U, 0x03U, 0x04U, 0x05U, 0x06U, 0x07U, 0x08U,
+        0x09U, 0x0AU, 0x0BU, 0x0CU, 0x0DU, 0x0EU, 0x0FU, 0x10U
+    };
+
+    uint32_t baseline;
+    uint32_t measured[BENCH_ITEM_COUNT];
+
+    __disable_irq();
+
+    /* Calibrate measurement baseline overhead (counter reset + read) */
+    __HAL_TIM_SET_COUNTER(&htim1, 0U);
+    __HAL_TIM_SET_COUNTER(&htim3, 0U);
+    baseline = profiler_port_ticks();
+
+    /* 1. bench_exact_100_cycles */
+    __HAL_TIM_SET_COUNTER(&htim1, 0U);
+    __HAL_TIM_SET_COUNTER(&htim3, 0U);
+    (void)bench_exact_100_cycles();
+    measured[0] = profiler_port_ticks() - baseline;
+
+    /* 2. bench_exact_500_cycles */
+    __HAL_TIM_SET_COUNTER(&htim1, 0U);
+    __HAL_TIM_SET_COUNTER(&htim3, 0U);
+    (void)bench_exact_500_cycles();
+    measured[1] = profiler_port_ticks() - baseline;
+
+    /* 3. bench_exact_1000_cycles */
+    __HAL_TIM_SET_COUNTER(&htim1, 0U);
+    __HAL_TIM_SET_COUNTER(&htim3, 0U);
+    (void)bench_exact_1000_cycles();
+    measured[2] = profiler_port_ticks() - baseline;
+
+    /* 4. bench_unrolled_poly32 */
+    __HAL_TIM_SET_COUNTER(&htim1, 0U);
+    __HAL_TIM_SET_COUNTER(&htim3, 0U);
+    (void)bench_unrolled_poly32(3U);
+    measured[3] = profiler_port_ticks() - baseline;
+
+    /* 5. bench_matrix_mul_2x2 */
+    __HAL_TIM_SET_COUNTER(&htim1, 0U);
+    __HAL_TIM_SET_COUNTER(&htim3, 0U);
+    bench_matrix_mul_2x2(mat_a, mat_b, mat_out);
+    measured[4] = profiler_port_ticks() - baseline;
+
+    /* 6. bench_fixed_loop_sum */
+    __HAL_TIM_SET_COUNTER(&htim1, 0U);
+    __HAL_TIM_SET_COUNTER(&htim3, 0U);
+    (void)bench_fixed_loop_sum(25U);
+    measured[5] = profiler_port_ticks() - baseline;
+
+    /* 7. bench_crc8_fixed_block */
+    __HAL_TIM_SET_COUNTER(&htim1, 0U);
+    __HAL_TIM_SET_COUNTER(&htim3, 0U);
+    (void)bench_crc8_fixed_block(crc_data, sizeof(crc_data));
+    measured[6] = profiler_port_ticks() - baseline;
+
+    __enable_irq();
+
+    (void)mat_out;
+
+    for (size_t i = 0U; i < BENCH_ITEM_COUNT; i++) {
+        /* In standalone mode, measured duration includes caller BL (3 cyc) + baseline subtraction */
+        if ((measured[i] < (s_bench_items[i].expected_cycles - s_bench_items[i].tolerance)) ||
+            (measured[i] > (s_bench_items[i].expected_cycles + s_bench_items[i].tolerance))) {
+            all_pass = false;
+        }
+    }
+
+    return all_pass;
+}
+
+static void update_led_indicator(bool all_pass)
+{
+    static uint32_t s_last_toggle = 0U;
+    static uint8_t s_step = 0U;
+    uint32_t now = HAL_GetTick();
+
+    if (all_pass) {
+        /* PASS: Calm, periodic double-pulse heartbeat every 1000ms
+         * Step 0: ON  (80ms)
+         * Step 1: OFF (120ms)
+         * Step 2: ON  (80ms)
+         * Step 3: OFF (720ms) */
+        uint32_t step_delays[4] = { 80U, 120U, 80U, 720U };
+        if ((now - s_last_toggle) >= step_delays[s_step % 4U]) {
+            s_last_toggle = now;
+            s_step = (uint8_t)((s_step + 1U) % 4U);
+            if ((s_step == 1U) || (s_step == 3U)) {
+                HAL_GPIO_WritePin(LED_GREEN_GPIO_Port, LED_GREEN_Pin, GPIO_PIN_SET);
+            } else {
+                HAL_GPIO_WritePin(LED_GREEN_GPIO_Port, LED_GREEN_Pin, GPIO_PIN_RESET);
+            }
+        }
+    } else {
+        /* FAIL: Rapid urgent warning strobe (10 Hz, 50ms toggle) */
+        if ((now - s_last_toggle) >= 50U) {
+            s_last_toggle = now;
+            HAL_GPIO_TogglePin(LED_GREEN_GPIO_Port, LED_GREEN_Pin);
+        }
+    }
 }
 
 static uint32_t profiler_tick_ms(void)
@@ -193,18 +336,9 @@ int main(void)
   MX_TIM1_Init();
   MX_TIM3_Init();
   /* USER CODE BEGIN 2 */
-  ProfilerConfig profiler_config = {
-      .frequency = HAL_RCC_GetPCLK1Freq(),
-      .map_entries = s_profiler_map,
-      .map_capacity = PROFILER_MAP_CAPACITY,
-      .metrics = s_profiler_metrics,
-      .metrics_capacity = PROFILER_MAP_CAPACITY,
-      .stack_frames = s_profiler_stack,
-      .stack_depth = PROFILER_STACK_DEPTH,
-      .contexts = s_profiler_contexts,
-      .context_capacity = PROFILER_CONTEXT_CAPACITY,
-      .time_mode = PROFILER_APP_TIME_MODE_VALUE
-  };
+  if (!profiler_init(HAL_RCC_GetPCLK1Freq())) {
+      Error_Handler();
+  }
   ProfilerTransportConfig transport_config = {
       .device = &huart2,
       .tx_buffer = s_profiler_tx_buffer,
@@ -216,9 +350,6 @@ int main(void)
       .yield = profiler_yield_ms
   };
 
-  if (!profiler_init(&profiler_config)) {
-      Error_Handler();
-  }
   if (profiler_transport_init(&transport_config) != PROFILER_TRANSPORT_STATUS_OK) {
       Error_Handler();
   }
@@ -243,12 +374,31 @@ int main(void)
     uint8_t events = profiler_transport_poll(&frame_length);
 
     if ((events & PROFILER_TRANSPORT_EVENT_FRAME) != 0U) {
-        if (profiler_command_matches(s_profiler_rx_buffer, frame_length)) {
+        if (command_matches(s_profiler_rx_buffer, frame_length, PROFILER_DUMP_COMMAND)) {
             (void)profiler_dump_metrics();
+        } else if (command_matches(s_profiler_rx_buffer, frame_length, PROFILER_LIVE_COMMAND)) {
+            profiler_report_live();
+        } else if (command_matches(s_profiler_rx_buffer, frame_length, PROFILER_HELP_COMMAND)) {
+            static const char help_msg[] =
+                "\r\nCommands:\r\n"
+                "  live      - Show live runtime cycle statistics (ASCII table)\r\n"
+                "  prof-dump - Stream binary profiler telemetry for sewcet\r\n"
+                "  help      - Print this command list\r\n\r\n";
+            HAL_UART_Transmit(&huart2, (const uint8_t*)help_msg, (uint16_t)(sizeof(help_msg) - 1U), 500U);
         }
         (void)profiler_transport_listen();
     }
 
+    /* Periodic standalone diagnostic test (independent of profiler) */
+    static uint32_t s_last_diag = 0U;
+    uint32_t now = HAL_GetTick();
+    if ((now - s_last_diag) >= 200U) {
+        s_last_diag = now;
+        g_diag_all_pass = run_diagnostics();
+    }
+
+    /* Update intuitive status LED pattern */
+    update_led_indicator(g_diag_all_pass);
 
     /* Benchmark workload execution under profiling */
     static const int32_t mat_a[4] = { 1, 2, 3, 4 };
@@ -274,7 +424,6 @@ int main(void)
 
     (void)mat_out;
 
-    HAL_GPIO_TogglePin(LED_GREEN_GPIO_Port, LED_GREEN_Pin);
     HAL_Delay(5);
   }
   /* USER CODE END 3 */
