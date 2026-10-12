@@ -1,0 +1,90 @@
+{
+    "schema_version": 1,
+    "description": "OTAWA static WCET targets for profiler_demo on STM32G070RB",
+    "elf": "../build/Measure/profiler_demo.elf",
+    "output_csv": "1mw.csv",
+    "comparison_csv": "comparison_measure.csv",
+    "captures": {
+        "target": "../1m.csv"
+    },
+    "work_dir": "work/measure",
+    "timing": {
+        "cpu_clock_hz": 16000000,
+        "tick_hz": 1000,
+        "clock_notes": "SystemClock_Config: HSI16, PLL off, AHB/APB prescaler 1, FLASH_LATENCY_0. Profiler timer runs at 16 MHz (1 tick = 1 CPU cycle).",
+        "model": "m0plus",
+        "reduce_irreducible_loops": true,
+        "m0plus": {
+            "mul_cycles": 1,
+            "mem_wait_states": 0,
+            "taken_branch_penalty": 1
+        }
+    },
+    "flow_facts": {
+        "loops": [
+            {
+                "function": "bench_fixed_loop_sum",
+                "offset": "0x1c",
+                "bound": 25,
+                "reason": "Loop counts down from count = 25 to 0."
+            },
+            {
+                "function": "bench_crc8_fixed_block",
+                "offset": "0x76",
+                "bound": 8,
+                "reason": "Inner bit loop runs 8 iterations per byte."
+            },
+            {
+                "function": "bench_crc8_fixed_block",
+                "offset": "0x86",
+                "bound": 16,
+                "reason": "Outer byte loop runs 16 iterations over 16-byte buffer."
+            }
+        ]
+    },
+    "functions": [
+        {
+            "name": "bench_exact_100_cycles",
+            "switch_overhead": "bench_call_overhead",
+            "reason": "Exact 100-cycle assembly workload composed with 4-cycle call-site BL probe overhead."
+        },
+        {
+            "name": "bench_exact_500_cycles",
+            "switch_overhead": "bench_call_overhead",
+            "reason": "Exact 500-cycle assembly workload composed with 4-cycle call-site BL probe overhead."
+        },
+        {
+            "name": "bench_exact_1000_cycles",
+            "switch_overhead": "bench_call_overhead",
+            "reason": "Exact 1000-cycle assembly workload composed with 4-cycle call-site BL probe overhead."
+        },
+        {
+            "name": "bench_unrolled_poly32",
+            "switch_overhead": "bench_call_overhead",
+            "reason": "Unrolled 10th-order polynomial composed with parameter setup & BL call overhead."
+        },
+        {
+            "name": "bench_matrix_mul_2x2",
+            "switch_overhead": "bench_matrix_overhead",
+            "reason": "2x2 matrix multiplication composed with 3-pointer parameter passing overhead."
+        },
+        {
+            "name": "bench_fixed_loop_sum",
+            "switch_overhead": "bench_call_overhead",
+            "reason": "Bounded countdown loop summation composed with call overhead."
+        },
+        {
+            "name": "bench_crc8_fixed_block"
+        }
+    ],
+    "interference_functions": [
+        {
+            "name": "bench_call_overhead",
+            "reason": "Caller BL and scope probe branch overhead."
+        },
+        {
+            "name": "bench_matrix_overhead",
+            "reason": "Caller 3-pointer parameter register loading overhead."
+        }
+    ]
+}

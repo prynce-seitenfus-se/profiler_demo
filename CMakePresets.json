@@ -1,0 +1,55 @@
+{
+    "version": 3,
+    "configurePresets": [
+        {
+            "name": "default",
+            "hidden": true,
+            "generator": "Ninja",
+            "binaryDir": "${sourceDir}/build/${presetName}",
+            "toolchainFile": "${sourceDir}/cmake/gcc-arm-none-eabi.cmake",
+            "cacheVariables": {
+                "PROFILER_APP_TIME_MODE": "ACTIVE"
+            }
+        },
+        {
+            "name": "Debug",
+            "inherits": "default",
+            "cacheVariables": {
+                "CMAKE_BUILD_TYPE": "Debug",
+                "PROFILER_PORT": "2x16bit",
+                "PROFILER_TRANSPORT": "uart_stm32_hal_dma"
+            }
+        },
+        {
+            "name": "Release",
+            "inherits": "default",
+            "cacheVariables": {
+                "CMAKE_BUILD_TYPE": "Release",
+                "PROFILER_PORT": "2x16bit",
+                "PROFILER_TRANSPORT": "uart_stm32_hal_dma"
+            }
+        },
+        {
+            "name": "Measure",
+            "inherits": "Debug",
+            "cacheVariables": {
+                "PROFILER_APP_SCOPES": "ON",
+                "PROFILER_APP_INSTRUMENTED": "OFF"
+            }
+        }
+    ],
+    "buildPresets": [
+        {
+            "name": "Debug",
+            "configurePreset": "Debug"
+        },
+        {
+            "name": "Release",
+            "configurePreset": "Release"
+        },
+        {
+            "name": "Measure",
+            "configurePreset": "Measure"
+        }
+    ]
+}

@@ -53,3 +53,12 @@ dkms.conf
 
 # debug information files
 *.dwo
+build/
+.history/
+log/
+*.csv
+*.bin
+*.log
+sewcet/work/
+.clangd/
+.vscode/c_cpp_properties.json
