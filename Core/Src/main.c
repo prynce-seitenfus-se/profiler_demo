@@ -49,12 +49,6 @@ typedef struct BenchExpectedItem {
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
-#define PROFILER_TX_BUFFER_SIZE   (256U)
-#define PROFILER_RX_BUFFER_SIZE   (32U)
-#define PROFILER_TX_TIMEOUT_MS    (1000U)
-#define PROFILER_DUMP_COMMAND     "prof-dump"
-#define PROFILER_LIVE_COMMAND     "live"
-#define PROFILER_HELP_COMMAND     "help"
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -65,8 +59,6 @@ typedef struct BenchExpectedItem {
 /* Private variables ---------------------------------------------------------*/
 
 /* USER CODE BEGIN PV */
-static uint8_t s_profiler_tx_buffer[PROFILER_TX_BUFFER_SIZE] __attribute__((aligned(32)));
-static uint8_t s_profiler_rx_buffer[PROFILER_RX_BUFFER_SIZE] __attribute__((aligned(32)));
 
 static const BenchExpectedItem s_bench_items[] = {
     { "bench_exact_100_cycles",  (const void*)bench_exact_100_cycles,  103U,  5U },
@@ -90,97 +82,12 @@ void* const volatile g_bench_symbols[] = {
 /* Private function prototypes -----------------------------------------------*/
 void SystemClock_Config(void);
 /* USER CODE BEGIN PFP */
-static bool command_matches(const uint8_t* buffer, size_t length, const char* cmd);
-static bool profiler_dump_metrics(void);
-static void profiler_report_live(void);
 static bool run_diagnostics(void);
 static void update_led_indicator(bool all_pass);
-static uint32_t profiler_tick_ms(void);
-static void profiler_yield_ms(uint32_t milliseconds);
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
-static bool command_matches(const uint8_t* buffer, size_t length, const char* cmd)
-{
-    size_t first = 0U;
-    size_t last = length;
-    size_t cmd_len;
-
-    if ((buffer == NULL) || (cmd == NULL) || (length > PROFILER_RX_BUFFER_SIZE)) {
-        return false;
-    }
-
-    cmd_len = strlen(cmd);
-
-    while ((first < last) &&
-           ((buffer[first] == (uint8_t)' ') || (buffer[first] == (uint8_t)'\t') ||
-            (buffer[first] == (uint8_t)'\r') || (buffer[first] == (uint8_t)'\n'))) {
-        first++;
-    }
-    while ((last > first) &&
-           ((buffer[last - 1U] == (uint8_t)' ') || (buffer[last - 1U] == (uint8_t)'\t') ||
-            (buffer[last - 1U] == (uint8_t)'\r') || (buffer[last - 1U] == (uint8_t)'\n'))) {
-        last--;
-    }
-
-    if ((last - first) != cmd_len) {
-        return false;
-    }
-
-    for (size_t index = 0U; index < cmd_len; index++) {
-        if (buffer[first + index] != (uint8_t)cmd[index]) {
-            return false;
-        }
-    }
-
-    return true;
-}
-
-static bool profiler_dump_metrics(void)
-{
-    const Stream* stream = profiler_transport_stream();
-    bool success;
-
-    if (stream == NULL) {
-        return false;
-    }
-
-    profiler_stop();
-    (void)profiler_transport_status();
-    success = profiler_dump(stream, PROFILER_DUMP_BIN);
-    if (profiler_transport_status() != PROFILER_TRANSPORT_STATUS_OK) {
-        success = false;
-    }
-    profiler_start();
-
-    return success;
-}
-
-static void profiler_report_live(void)
-{
-    const Stream* stream = profiler_transport_stream();
-    char line_buf[64];
-    int len;
-
-    if (stream == NULL) {
-        return;
-    }
-
-    profiler_stop();
-    (void)profiler_dump(stream, PROFILER_DUMP_TOP);
-
-    len = snprintf(line_buf, sizeof(line_buf),
-                   "Standalone Diag: [%s]\r\n\r\n",
-                   g_diag_all_pass ? "ALL PASS" : "FAIL");
-    if (len > 0) {
-        (void)stream_write(stream, (const uint8_t*)line_buf, (size_t)len);
-        stream_flush(stream);
-    }
-
-    profiler_start();
-}
-
 /* Standalone diagnostic measurement: does NOT need profiler dump pipeline */
 static bool run_diagnostics(void)
 {
@@ -262,6 +169,7 @@ static bool run_diagnostics(void)
 
 static void update_led_indicator(bool all_pass)
 {
+    PROFILER_FUNCTION();
     static uint32_t s_last_toggle = 0U;
     static uint8_t s_step = 0U;
     uint32_t now = HAL_GetTick();
@@ -291,15 +199,32 @@ static void update_led_indicator(bool all_pass)
     }
 }
 
-static uint32_t profiler_tick_ms(void)
+static void run_benchmark_suite(void)
 {
-    return HAL_GetTick();
+    PROFILER_FUNCTION();
+
+    static const int32_t mat_a[4] = { 1, 2, 3, 4 };
+    static const int32_t mat_b[4] = { 5, 6, 7, 8 };
+    int32_t mat_out[4] = { 0, 0, 0, 0 };
+    static const uint8_t crc_data[16] = {
+        0x01U, 0x02U, 0x03U, 0x04U, 0x05U, 0x06U, 0x07U, 0x08U,
+        0x09U, 0x0AU, 0x0BU, 0x0CU, 0x0DU, 0x0EU, 0x0FU, 0x10U
+    };
+
+    __disable_irq();
+
+    PROFILER_SCOPE(bench_exact_100_cycles, bench_exact_100_cycles());
+    PROFILER_SCOPE(bench_exact_500_cycles, bench_exact_500_cycles());
+    PROFILER_SCOPE(bench_exact_1000_cycles, bench_exact_1000_cycles());
+    PROFILER_SCOPE(bench_unrolled_poly32, bench_unrolled_poly32(3U));
+    PROFILER_SCOPE(bench_matrix_mul_2x2, bench_matrix_mul_2x2(mat_a, mat_b, mat_out));
+    PROFILER_SCOPE(bench_fixed_loop_sum, bench_fixed_loop_sum(25U));
+    PROFILER_SCOPE(bench_crc8_fixed_block, bench_crc8_fixed_block(crc_data, sizeof(crc_data)));
+    __enable_irq();
+
+    (void)mat_out;
 }
 
-static void profiler_yield_ms(uint32_t milliseconds)
-{
-    HAL_Delay(milliseconds);
-}
 /* USER CODE END 0 */
 
 /**
@@ -339,21 +264,7 @@ int main(void)
   if (!profiler_init(HAL_RCC_GetPCLK1Freq())) {
       Error_Handler();
   }
-  ProfilerTransportConfig transport_config = {
-      .device = &huart2,
-      .tx_buffer = s_profiler_tx_buffer,
-      .tx_buffer_size = sizeof(s_profiler_tx_buffer),
-      .rx_buffer = s_profiler_rx_buffer,
-      .rx_buffer_size = sizeof(s_profiler_rx_buffer),
-      .tx_timeout_ms = PROFILER_TX_TIMEOUT_MS,
-      .tick_ms = profiler_tick_ms,
-      .yield = profiler_yield_ms
-  };
-
-  if (profiler_transport_init(&transport_config) != PROFILER_TRANSPORT_STATUS_OK) {
-      Error_Handler();
-  }
-  if (profiler_transport_listen() != PROFILER_TRANSPORT_STATUS_OK) {
+  if (profiler_transport_init(&huart2) != PROFILER_TRANSPORT_STATUS_OK) {
       Error_Handler();
   }
 
@@ -370,24 +281,7 @@ int main(void)
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
-    size_t frame_length = 0U;
-    uint8_t events = profiler_transport_poll(&frame_length);
-
-    if ((events & PROFILER_TRANSPORT_EVENT_FRAME) != 0U) {
-        if (command_matches(s_profiler_rx_buffer, frame_length, PROFILER_DUMP_COMMAND)) {
-            (void)profiler_dump_metrics();
-        } else if (command_matches(s_profiler_rx_buffer, frame_length, PROFILER_LIVE_COMMAND)) {
-            profiler_report_live();
-        } else if (command_matches(s_profiler_rx_buffer, frame_length, PROFILER_HELP_COMMAND)) {
-            static const char help_msg[] =
-                "\r\nCommands:\r\n"
-                "  live      - Show live runtime cycle statistics (ASCII table)\r\n"
-                "  prof-dump - Stream binary profiler telemetry for sewcet\r\n"
-                "  help      - Print this command list\r\n\r\n";
-            HAL_UART_Transmit(&huart2, (const uint8_t*)help_msg, (uint16_t)(sizeof(help_msg) - 1U), 500U);
-        }
-        (void)profiler_transport_listen();
-    }
+    (void)profiler_transport_process();
 
     /* Periodic standalone diagnostic test (independent of profiler) */
     static uint32_t s_last_diag = 0U;
@@ -401,28 +295,7 @@ int main(void)
     update_led_indicator(g_diag_all_pass);
 
     /* Benchmark workload execution under profiling */
-    static const int32_t mat_a[4] = { 1, 2, 3, 4 };
-    static const int32_t mat_b[4] = { 5, 6, 7, 8 };
-    int32_t mat_out[4] = { 0, 0, 0, 0 };
-    static const uint8_t crc_data[16] = {
-        0x01U, 0x02U, 0x03U, 0x04U, 0x05U, 0x06U, 0x07U, 0x08U,
-        0x09U, 0x0AU, 0x0BU, 0x0CU, 0x0DU, 0x0EU, 0x0FU, 0x10U
-    };
-
-    __disable_irq();
-    __HAL_TIM_SET_COUNTER(&htim1, 0U);
-    __HAL_TIM_SET_COUNTER(&htim3, 0U);
-
-    PROFILER_SCOPE(bench_exact_100_cycles, bench_exact_100_cycles());
-    PROFILER_SCOPE(bench_exact_500_cycles, bench_exact_500_cycles());
-    PROFILER_SCOPE(bench_exact_1000_cycles, bench_exact_1000_cycles());
-    PROFILER_SCOPE(bench_unrolled_poly32, bench_unrolled_poly32(3U));
-    PROFILER_SCOPE(bench_matrix_mul_2x2, bench_matrix_mul_2x2(mat_a, mat_b, mat_out));
-    PROFILER_SCOPE(bench_fixed_loop_sum, bench_fixed_loop_sum(25U));
-    PROFILER_SCOPE(bench_crc8_fixed_block, bench_crc8_fixed_block(crc_data, sizeof(crc_data)));
-    __enable_irq();
-
-    (void)mat_out;
+    run_benchmark_suite();
 
     HAL_Delay(5);
   }
