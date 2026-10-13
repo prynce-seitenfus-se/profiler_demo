@@ -80,8 +80,8 @@ list(REMOVE_ITEM CMAKE_C_IMPLICIT_LINK_LIBRARIES ob)
 
 # Add linked libraries
 target_link_libraries(${CMAKE_PROJECT_NAME}
+    -Wl,--whole-archive profiler -Wl,--no-whole-archive
     stm32cubemx
-    profiler
 )
 
 # Profiler duration semantics: ACTIVE (CPU time only, default) or WALL

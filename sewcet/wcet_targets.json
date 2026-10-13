@@ -45,46 +45,36 @@
     "functions": [
         {
             "name": "bench_exact_100_cycles",
-            "switch_overhead": "bench_call_overhead",
+            "call_site_overhead_cycles": 4,
             "reason": "Exact 100-cycle assembly workload composed with 4-cycle call-site BL probe overhead."
         },
         {
             "name": "bench_exact_500_cycles",
-            "switch_overhead": "bench_call_overhead",
+            "call_site_overhead_cycles": 4,
             "reason": "Exact 500-cycle assembly workload composed with 4-cycle call-site BL probe overhead."
         },
         {
             "name": "bench_exact_1000_cycles",
-            "switch_overhead": "bench_call_overhead",
+            "call_site_overhead_cycles": 4,
             "reason": "Exact 1000-cycle assembly workload composed with 4-cycle call-site BL probe overhead."
         },
         {
             "name": "bench_unrolled_poly32",
-            "switch_overhead": "bench_call_overhead",
+            "call_site_overhead_cycles": 4,
             "reason": "Unrolled 10th-order polynomial composed with parameter setup & BL call overhead."
         },
         {
             "name": "bench_matrix_mul_2x2",
-            "switch_overhead": "bench_matrix_overhead",
+            "call_site_overhead_cycles": 9,
             "reason": "2x2 matrix multiplication composed with 3-pointer parameter passing overhead."
         },
         {
             "name": "bench_fixed_loop_sum",
-            "switch_overhead": "bench_call_overhead",
+            "call_site_overhead_cycles": 4,
             "reason": "Bounded countdown loop summation composed with call overhead."
         },
         {
             "name": "bench_crc8_fixed_block"
-        }
-    ],
-    "interference_functions": [
-        {
-            "name": "bench_call_overhead",
-            "reason": "Caller BL and scope probe branch overhead."
-        },
-        {
-            "name": "bench_matrix_overhead",
-            "reason": "Caller 3-pointer parameter register loading overhead."
         }
     ]
 }

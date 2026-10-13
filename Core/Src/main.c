@@ -34,17 +34,11 @@
 #include "benchmark.h"
 #include "profiler.h"
 #include "profiler_port.h"
-#include "profiler_transport.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
 /* USER CODE BEGIN PTD */
-typedef struct BenchExpectedItem {
-    const char* name;
-    const void* fn_addr;
-    uint32_t    expected_cycles;
-    uint32_t    tolerance;
-} BenchExpectedItem;
+
 /* USER CODE END PTD */
 
 /* Private define ------------------------------------------------------------*/
@@ -60,171 +54,40 @@ typedef struct BenchExpectedItem {
 
 /* USER CODE BEGIN PV */
 
-static const BenchExpectedItem s_bench_items[] = {
-    { "bench_exact_100_cycles",  (const void*)bench_exact_100_cycles,  103U,  5U },
-    { "bench_exact_500_cycles",  (const void*)bench_exact_500_cycles,  503U,  5U },
-    { "bench_exact_1000_cycles", (const void*)bench_exact_1000_cycles, 1003U, 5U },
-    { "bench_unrolled_poly32",   (const void*)bench_unrolled_poly32,   104U,  5U },
-    { "bench_matrix_mul_2x2",    (const void*)bench_matrix_mul_2x2,    148U,  5U },
-    { "bench_fixed_loop_sum",    (const void*)bench_fixed_loop_sum,    455U,  5U },
-    { "bench_crc8_fixed_block",  (const void*)bench_crc8_fixed_block,  4819U, 20U }
-};
-#define BENCH_ITEM_COUNT (sizeof(s_bench_items) / sizeof(s_bench_items[0]))
-
-static volatile bool g_diag_all_pass = true;
-
-void* const volatile g_bench_symbols[] = {
-    (void*)bench_call_overhead,
-    (void*)bench_matrix_overhead
-};
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
 void SystemClock_Config(void);
 /* USER CODE BEGIN PFP */
-static bool run_diagnostics(void);
-static void update_led_indicator(bool all_pass);
+static void update_user_led(void);
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
-/* Standalone diagnostic measurement: does NOT need profiler dump pipeline */
-static bool run_diagnostics(void)
-{
-    bool all_pass = true;
-    static const int32_t mat_a[4] = { 1, 2, 3, 4 };
-    static const int32_t mat_b[4] = { 5, 6, 7, 8 };
-    int32_t mat_out[4] = { 0, 0, 0, 0 };
-    static const uint8_t crc_data[16] = {
-        0x01U, 0x02U, 0x03U, 0x04U, 0x05U, 0x06U, 0x07U, 0x08U,
-        0x09U, 0x0AU, 0x0BU, 0x0CU, 0x0DU, 0x0EU, 0x0FU, 0x10U
-    };
-
-    uint32_t baseline;
-    uint32_t measured[BENCH_ITEM_COUNT];
-
-    __disable_irq();
-
-    /* Calibrate measurement baseline overhead (counter reset + read) */
-    __HAL_TIM_SET_COUNTER(&htim1, 0U);
-    __HAL_TIM_SET_COUNTER(&htim3, 0U);
-    baseline = profiler_port_ticks();
-
-    /* 1. bench_exact_100_cycles */
-    __HAL_TIM_SET_COUNTER(&htim1, 0U);
-    __HAL_TIM_SET_COUNTER(&htim3, 0U);
-    (void)bench_exact_100_cycles();
-    measured[0] = profiler_port_ticks() - baseline;
-
-    /* 2. bench_exact_500_cycles */
-    __HAL_TIM_SET_COUNTER(&htim1, 0U);
-    __HAL_TIM_SET_COUNTER(&htim3, 0U);
-    (void)bench_exact_500_cycles();
-    measured[1] = profiler_port_ticks() - baseline;
-
-    /* 3. bench_exact_1000_cycles */
-    __HAL_TIM_SET_COUNTER(&htim1, 0U);
-    __HAL_TIM_SET_COUNTER(&htim3, 0U);
-    (void)bench_exact_1000_cycles();
-    measured[2] = profiler_port_ticks() - baseline;
-
-    /* 4. bench_unrolled_poly32 */
-    __HAL_TIM_SET_COUNTER(&htim1, 0U);
-    __HAL_TIM_SET_COUNTER(&htim3, 0U);
-    (void)bench_unrolled_poly32(3U);
-    measured[3] = profiler_port_ticks() - baseline;
-
-    /* 5. bench_matrix_mul_2x2 */
-    __HAL_TIM_SET_COUNTER(&htim1, 0U);
-    __HAL_TIM_SET_COUNTER(&htim3, 0U);
-    bench_matrix_mul_2x2(mat_a, mat_b, mat_out);
-    measured[4] = profiler_port_ticks() - baseline;
-
-    /* 6. bench_fixed_loop_sum */
-    __HAL_TIM_SET_COUNTER(&htim1, 0U);
-    __HAL_TIM_SET_COUNTER(&htim3, 0U);
-    (void)bench_fixed_loop_sum(25U);
-    measured[5] = profiler_port_ticks() - baseline;
-
-    /* 7. bench_crc8_fixed_block */
-    __HAL_TIM_SET_COUNTER(&htim1, 0U);
-    __HAL_TIM_SET_COUNTER(&htim3, 0U);
-    (void)bench_crc8_fixed_block(crc_data, sizeof(crc_data));
-    measured[6] = profiler_port_ticks() - baseline;
-
-    __enable_irq();
-
-    (void)mat_out;
-
-    for (size_t i = 0U; i < BENCH_ITEM_COUNT; i++) {
-        /* In standalone mode, measured duration includes caller BL (3 cyc) + baseline subtraction */
-        if ((measured[i] < (s_bench_items[i].expected_cycles - s_bench_items[i].tolerance)) ||
-            (measured[i] > (s_bench_items[i].expected_cycles + s_bench_items[i].tolerance))) {
-            all_pass = false;
-        }
-    }
-
-    return all_pass;
-}
-
-static void update_led_indicator(bool all_pass)
+static void update_user_led(void)
 {
     PROFILER_FUNCTION();
+
+    /* Calm, periodic double-pulse heartbeat every 1000ms:
+     * Step 0: ON  (80ms)
+     * Step 1: OFF (120ms)
+     * Step 2: ON  (80ms)
+     * Step 3: OFF (720ms) */
     static uint32_t s_last_toggle = 0U;
     static uint8_t s_step = 0U;
-    uint32_t now = HAL_GetTick();
+    const uint32_t now = HAL_GetTick();
+    const uint32_t step_delays[4] = { 80U, 120U, 80U, 720U };
 
-    if (all_pass) {
-        /* PASS: Calm, periodic double-pulse heartbeat every 1000ms
-         * Step 0: ON  (80ms)
-         * Step 1: OFF (120ms)
-         * Step 2: ON  (80ms)
-         * Step 3: OFF (720ms) */
-        uint32_t step_delays[4] = { 80U, 120U, 80U, 720U };
-        if ((now - s_last_toggle) >= step_delays[s_step % 4U]) {
-            s_last_toggle = now;
-            s_step = (uint8_t)((s_step + 1U) % 4U);
-            if ((s_step == 1U) || (s_step == 3U)) {
-                HAL_GPIO_WritePin(LED_GREEN_GPIO_Port, LED_GREEN_Pin, GPIO_PIN_SET);
-            } else {
-                HAL_GPIO_WritePin(LED_GREEN_GPIO_Port, LED_GREEN_Pin, GPIO_PIN_RESET);
-            }
-        }
-    } else {
-        /* FAIL: Rapid urgent warning strobe (10 Hz, 50ms toggle) */
-        if ((now - s_last_toggle) >= 50U) {
-            s_last_toggle = now;
-            HAL_GPIO_TogglePin(LED_GREEN_GPIO_Port, LED_GREEN_Pin);
+    if ((now - s_last_toggle) >= step_delays[s_step % 4U]) {
+        s_last_toggle = now;
+        s_step = (uint8_t)((s_step + 1U) % 4U);
+        if ((s_step == 1U) || (s_step == 3U)) {
+            HAL_GPIO_WritePin(LED_GREEN_GPIO_Port, LED_GREEN_Pin, GPIO_PIN_SET);
+        } else {
+            HAL_GPIO_WritePin(LED_GREEN_GPIO_Port, LED_GREEN_Pin, GPIO_PIN_RESET);
         }
     }
 }
-
-static void run_benchmark_suite(void)
-{
-    PROFILER_FUNCTION();
-
-    static const int32_t mat_a[4] = { 1, 2, 3, 4 };
-    static const int32_t mat_b[4] = { 5, 6, 7, 8 };
-    int32_t mat_out[4] = { 0, 0, 0, 0 };
-    static const uint8_t crc_data[16] = {
-        0x01U, 0x02U, 0x03U, 0x04U, 0x05U, 0x06U, 0x07U, 0x08U,
-        0x09U, 0x0AU, 0x0BU, 0x0CU, 0x0DU, 0x0EU, 0x0FU, 0x10U
-    };
-
-    __disable_irq();
-
-    PROFILER_SCOPE(bench_exact_100_cycles, bench_exact_100_cycles());
-    PROFILER_SCOPE(bench_exact_500_cycles, bench_exact_500_cycles());
-    PROFILER_SCOPE(bench_exact_1000_cycles, bench_exact_1000_cycles());
-    PROFILER_SCOPE(bench_unrolled_poly32, bench_unrolled_poly32(3U));
-    PROFILER_SCOPE(bench_matrix_mul_2x2, bench_matrix_mul_2x2(mat_a, mat_b, mat_out));
-    PROFILER_SCOPE(bench_fixed_loop_sum, bench_fixed_loop_sum(25U));
-    PROFILER_SCOPE(bench_crc8_fixed_block, bench_crc8_fixed_block(crc_data, sizeof(crc_data)));
-    __enable_irq();
-
-    (void)mat_out;
-}
-
 /* USER CODE END 0 */
 
 /**
@@ -261,15 +124,9 @@ int main(void)
   MX_TIM1_Init();
   MX_TIM3_Init();
   /* USER CODE BEGIN 2 */
-  if (!profiler_init(HAL_RCC_GetPCLK1Freq())) {
+  if (!profiler_init(HAL_RCC_GetPCLK1Freq(), &huart2)) {
       Error_Handler();
   }
-  if (profiler_transport_init(&huart2) != PROFILER_TRANSPORT_STATUS_OK) {
-      Error_Handler();
-  }
-
-  (void)bench_call_overhead();
-  (void)bench_matrix_overhead();
 
   profiler_start();
   /* USER CODE END 2 */
@@ -281,21 +138,31 @@ int main(void)
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
-    (void)profiler_transport_process();
-
-    /* Periodic standalone diagnostic test (independent of profiler) */
-    static uint32_t s_last_diag = 0U;
-    uint32_t now = HAL_GetTick();
-    if ((now - s_last_diag) >= 200U) {
-        s_last_diag = now;
-        g_diag_all_pass = run_diagnostics();
-    }
-
-    /* Update intuitive status LED pattern */
-    update_led_indicator(g_diag_all_pass);
+    (void)profiler_process();
 
     /* Benchmark workload execution under profiling */
-    run_benchmark_suite();
+    static const int32_t mat_a[4] = { 1, 2, 3, 4 };
+    static const int32_t mat_b[4] = { 5, 6, 7, 8 };
+    int32_t mat_out[4] = { 0, 0, 0, 0 };
+    static const uint8_t crc_data[16] = {
+        0x01U, 0x02U, 0x03U, 0x04U, 0x05U, 0x06U, 0x07U, 0x08U,
+        0x09U, 0x0AU, 0x0BU, 0x0CU, 0x0DU, 0x0EU, 0x0FU, 0x10U
+    };
+
+    const uint32_t crit_state = profiler_port_enter_critical();
+    PROFILER_SCOPE(bench_exact_100_cycles, bench_exact_100_cycles());
+    PROFILER_SCOPE(bench_exact_500_cycles, bench_exact_500_cycles());
+    PROFILER_SCOPE(bench_exact_1000_cycles, bench_exact_1000_cycles());
+    PROFILER_SCOPE(bench_unrolled_poly32, bench_unrolled_poly32(3U));
+    PROFILER_SCOPE(bench_matrix_mul_2x2, bench_matrix_mul_2x2(mat_a, mat_b, mat_out));
+    PROFILER_SCOPE(bench_fixed_loop_sum, bench_fixed_loop_sum(25U));
+    PROFILER_SCOPE(bench_crc8_fixed_block, bench_crc8_fixed_block(crc_data, sizeof(crc_data)));
+    profiler_port_exit_critical(crit_state);
+
+    (void)mat_out;
+
+    /* Update status LED heartbeat */
+    update_user_led();
 
     HAL_Delay(5);
   }

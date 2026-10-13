@@ -39,12 +39,6 @@ uint32_t bench_exact_500_cycles(void);
 uint32_t bench_exact_1000_cycles(void);
 
 /**
- * @brief Formal call-site scope probe & branch overhead component (4 cycles).
- */
-uint32_t bench_call_overhead(void);
-uint32_t bench_matrix_overhead(void);
-
-/**
  * @brief Category B: Unrolled 10th-order polynomial evaluation using Horner's method.
  *
  * Computes P(x) = sum_{i=0}^{10} c_i * x^i with fixed coefficients.
