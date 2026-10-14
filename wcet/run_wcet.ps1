@@ -22,6 +22,9 @@ param(
     [Alias('cmp', 'c')]
     [string[]]$Compare,
 
+    [ValidateSet('m0', 'm0plus', 'm23', 'm3', 'm4', 'm33', 'm7', 'trivial', 'generic')]
+    [string]$Model,
+
     [Parameter(Position = 0, ValueFromRemainingArguments = $true)]
     [string[]]$ExtraArgs
 )
@@ -80,24 +83,64 @@ $tool = Join-Path $sewcet 'wcet\run_wcet.ps1'
 if (-not (Test-Path -LiteralPath $tool)) {
     $tool = Join-Path $sewcet 'tools\run_wcet.ps1'
 }
-if (-not (Test-Path -LiteralPath $tool)) {
-    throw "sewcet tools not found: $tool (set SEWCET_DIR)"
-}
 
 $configPath = Join-Path $PSScriptRoot 'wcet_targets.json'
-$toolArgs = @{
-    Config   = $configPath
-    WcetOnly = ([bool]$Elf -and ($resolvedCompare.Count -eq 0))
-}
-if ($Elf) {
-    $toolArgs.Elf = Resolve-CallerPath $Elf
-}
-if ($Out) {
-    $toolArgs.Out = Resolve-CallerPath $Out
-}
-if ($resolvedCompare.Count -gt 0) {
-    $toolArgs.Compare = $resolvedCompare
+$wcetOnly = ([bool]$Elf -and ($resolvedCompare.Count -eq 0))
+
+if (Test-Path -LiteralPath $tool) {
+    $toolArgs = @{
+        Config   = $configPath
+        WcetOnly = $wcetOnly
+    }
+    if ($Elf) { $toolArgs.Elf = Resolve-CallerPath $Elf }
+    if ($Out) { $toolArgs.Out = Resolve-CallerPath $Out }
+    if ($Model) { $toolArgs.Model = $Model }
+    if ($resolvedCompare.Count -gt 0) { $toolArgs.Compare = $resolvedCompare }
+    & $tool @toolArgs
+    exit $LASTEXITCODE
 }
 
-& $tool @toolArgs
+function ConvertTo-WslPath([string]$Path) {
+    $full = [System.IO.Path]::GetFullPath($Path)
+    return (& wsl.exe -e wslpath -a ($full -replace '\\', '/')).Trim()
+}
+
+$localSh = Join-Path $PSScriptRoot 'run_wcet.sh'
+if (-not (Test-Path -LiteralPath $localSh)) {
+    throw "run_wcet.sh not found: $localSh"
+}
+
+$runner = ConvertTo-WslPath $localSh
+$wslArgs = @('-e', 'env')
+if ($Elf) {
+    $wslArgs += "ELF=$(ConvertTo-WslPath (Resolve-CallerPath $Elf))"
+}
+if ($wcetOnly) {
+    $wslArgs += "WCET_ONLY=1"
+}
+if (-not $Elf -and $resolvedCompare.Count -ge 2) {
+    $wslArgs += "COMPARE_ONLY=1"
+    $wslArgs += "COMPARE_CSV=$(ConvertTo-WslPath $resolvedCompare[0])"
+    $wslArgs += "WCET_OUT_CSV=$(ConvertTo-WslPath $resolvedCompare[1])"
+    if ($Out) {
+        $wslArgs += "COMPARE_OUT_CSV=$(ConvertTo-WslPath (Resolve-CallerPath $Out))"
+    }
+} else {
+    if ($Out) {
+        $wslArgs += "WCET_OUT_CSV=$(ConvertTo-WslPath (Resolve-CallerPath $Out))"
+    }
+    if ($resolvedCompare.Count -ge 1) {
+        $wslArgs += "COMPARE_CSV=$(ConvertTo-WslPath $resolvedCompare[0])"
+    }
+}
+
+$wslArgs += @('bash', $runner, (ConvertTo-WslPath $configPath))
+if ($Out -and $Elf) {
+    $wslArgs += @('--output', (ConvertTo-WslPath (Resolve-CallerPath $Out)))
+}
+if ($Model) {
+    $wslArgs += @('--model', $Model)
+}
+
+& wsl.exe @wslArgs
 exit $LASTEXITCODE

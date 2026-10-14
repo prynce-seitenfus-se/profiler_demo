@@ -19,12 +19,18 @@ json_value() {
 
 OTAWA_ENV_SCRIPT="$(json_value otawa_env)"
 if [[ -z "$OTAWA_ENV_SCRIPT" ]]; then
-    OTAWA_ENV_SCRIPT="$SCRIPT_DIR/../otawa-env.sh"
+    for candidate in "$SCRIPT_DIR/../otawa-env.sh" "$SCRIPT_DIR/../../sewcet/otawa-env.sh"; do
+        if [[ -f "$candidate" ]]; then
+            OTAWA_ENV_SCRIPT="$(realpath "$candidate")"
+            break
+        fi
+    done
 fi
-if [[ ! -f "$OTAWA_ENV_SCRIPT" ]]; then
+if [[ -z "$OTAWA_ENV_SCRIPT" || ! -f "$OTAWA_ENV_SCRIPT" ]]; then
     echo "error: OTAWA environment script not found: $OTAWA_ENV_SCRIPT" >&2
     exit 2
 fi
+export OTAWA_ENV_SCRIPT
 # shellcheck source=/dev/null
 source "$OTAWA_ENV_SCRIPT"
 

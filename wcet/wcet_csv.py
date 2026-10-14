@@ -31,7 +31,19 @@ UNBOUNDED_LOOP_RE = re.compile(r"no limit for the loop at (?P<fn>\S+) \+ (?P<off
 WINDOWS_DRIVE_RE = re.compile(r"[A-Za-z]:/")
 OWCET_TIMEOUT_S = 600
 SCHEMA_VERSION = 1
-MODELS_DIR = Path(__file__).resolve().parent.parent / "models"
+MODELS_DIR = Path(os.environ.get("SEWCET_MODELS_DIR") or (Path(os.environ.get("OTAWA_ENV_SCRIPT", __file__)).resolve().parent / "models"))
+if not MODELS_DIR.is_dir():
+    MODELS_DIR = (Path(__file__).resolve().parent.parent.parent / "sewcet" / "models").resolve()
+
+CORTEX_M_MODELS = {
+    "m0":     {"mul": 1, "div": 0,  "mem_wait": 0, "taken_penalty": 2, "lsu_pipelining": 0},
+    "m0plus": {"mul": 1, "div": 0,  "mem_wait": 0, "taken_penalty": 1, "lsu_pipelining": 0},
+    "m23":    {"mul": 1, "div": 17, "mem_wait": 0, "taken_penalty": 1, "lsu_pipelining": 0},
+    "m3":     {"mul": 1, "div": 12, "mem_wait": 0, "taken_penalty": 2, "lsu_pipelining": 1},
+    "m4":     {"mul": 1, "div": 12, "mem_wait": 0, "taken_penalty": 2, "lsu_pipelining": 1},
+    "m33":    {"mul": 1, "div": 11, "mem_wait": 0, "taken_penalty": 2, "lsu_pipelining": 1},
+    "m7":     {"mul": 1, "div": 12, "mem_wait": 0, "taken_penalty": 2, "lsu_pipelining": 1},
+}
 
 
 def load_config(path: Path) -> dict:
@@ -232,37 +244,44 @@ def write_script(work_dir: Path, timing: dict, model: str) -> Path:
     return script_path
 
 
-def build_m0plus_plugin(work_dir: Path) -> Path:
-    """Compiles the Cortex-M0+ plugin into work/.otawa/proc/otawa (OTAWA searches $PWD/.otawa/proc)."""
-    source_dir = MODELS_DIR / "m0plus"
+def build_cortex_m_plugin(work_dir: Path, model: str) -> Path:
+    """Compiles a Cortex-M plugin into work/.otawa/proc/otawa (OTAWA searches $PWD/.otawa/proc)."""
+    arm_dir = MODELS_DIR / "arm" if (MODELS_DIR / "arm").is_dir() else MODELS_DIR
+    source_dir = arm_dir / model
+    common_hdr = arm_dir / "cortex_m.hpp"
     plugin_dir = work_dir / ".otawa" / "proc" / "otawa"
     plugin_dir.mkdir(parents=True, exist_ok=True)
-    source = source_dir / "m0plus.cpp"
-    library = plugin_dir / "m0plus.so"
-    if (not library.is_file()) or (library.stat().st_mtime < source.stat().st_mtime):
+    source = source_dir / f"{model}.cpp"
+    library = plugin_dir / f"{model}.so"
+    hdr_mtime = common_hdr.stat().st_mtime if common_hdr.is_file() else 0
+    if (not library.is_file()) or (library.stat().st_mtime < max(source.stat().st_mtime, hdr_mtime)):
         flags = subprocess.run(["otawa-config", "--cflags"], check=True, capture_output=True, text=True).stdout.split()
         libs = subprocess.run(["otawa-config", "--libs"], check=True, capture_output=True, text=True).stdout.split()
         rpath = f"-Wl,-rpath,{Path(os.environ['OTAWA_INSTALL']) / 'lib'}"
-        command = (["g++", "-std=c++11", "-O2", "-Wall", "-Wno-c++20-compat", "-fPIC", "-shared"]
+        command = (["g++", "-std=c++11", "-O2", "-Wall", "-Wno-c++20-compat", "-fPIC", "-shared",
+                    f"-I{arm_dir}"]
                    + flags + [str(source), "-o", str(library)] + libs + [rpath])
         result = subprocess.run(command, capture_output=True, text=True)
         if result.returncode != 0:
-            raise RuntimeError(f"m0plus plugin build failed:\n{result.stderr}")
+            raise RuntimeError(f"{model} plugin build failed:\n{result.stderr}")
         print(f"built {library}")
-    shutil.copyfile(source_dir / "m0plus.eld", plugin_dir / "m0plus.eld")
-    return source_dir / "m0plus.osx"
+    shutil.copyfile(source_dir / f"{model}.eld", plugin_dir / f"{model}.eld")
+    return source_dir / f"{model}.osx"
 
 
 def owcet_args(config: dict, work_dir: Path, model: str) -> list:
     timing = config.get("timing", {})
-    if model == "m0plus":
-        m0plus = timing.get("m0plus", {})
+    if model in CORTEX_M_MODELS:
+        defaults = CORTEX_M_MODELS[model]
+        m_cfg = timing.get(model, {})
         reduce = 1 if timing.get("reduce_irreducible_loops", True) else 0
-        return ["-s", str(build_m0plus_plugin(work_dir)),
+        return ["-s", str(build_cortex_m_plugin(work_dir, model)),
                 "-p", f"reduce={reduce}",
-                "-p", f"mul_time={int(m0plus.get('mul_cycles', 1))}",
-                "-p", f"mem_wait={int(m0plus.get('mem_wait_states', 0))}",
-                "-p", f"taken_penalty={int(m0plus.get('taken_branch_penalty', 1))}"]
+                "-p", f"mul_time={int(m_cfg.get('mul_cycles', defaults['mul']))}",
+                "-p", f"div_time={int(m_cfg.get('div_cycles', defaults['div']))}",
+                "-p", f"mem_wait={int(m_cfg.get('mem_wait_states', defaults['mem_wait']))}",
+                "-p", f"taken_penalty={int(m_cfg.get('taken_branch_penalty', defaults['taken_penalty']))}",
+                "-p", f"lsu_pipelining={int(m_cfg.get('lsu_pipelining', defaults['lsu_pipelining']))}"]
     args = ["-s", str(write_script(work_dir, timing, model))]
     if model == "trivial":
         trivial = timing.get("trivial", {})
@@ -311,8 +330,20 @@ def normalize_function(fn) -> dict:
 def autodetect_model(elf: Path) -> str:
     try:
         out = subprocess.check_output(["readelf", "-A", str(elf)], text=True)
-        if "6S-M" in out or "Cortex-M0" in out:
+        if "Cortex-M0+" in out:
             return "m0plus"
+        if "Cortex-M0" in out or "6S-M" in out or "v6-M" in out:
+            return "m0plus"
+        if "Cortex-M23" in out or "v8-M.baseline" in out:
+            return "m23"
+        if "Cortex-M33" in out or "v8-M.mainline" in out:
+            return "m33"
+        if "Cortex-M7" in out:
+            return "m7"
+        if "Cortex-M4" in out or "v7E-M" in out:
+            return "m4"
+        if "Cortex-M3" in out or "v7-M" in out:
+            return "m3"
     except Exception:
         pass
     return "m0plus"
@@ -516,7 +547,7 @@ def main() -> int:
     parser.add_argument("--config", type=Path, required=True, help="project wcet_targets.json")
     parser.add_argument("--elf", type=Path, default=None, help="overrides $ELF and the JSON 'elf'")
     parser.add_argument("--output", type=Path, default=None, help="overrides the JSON 'output_csv'")
-    parser.add_argument("--model", choices=["m0plus", "trivial", "generic"], default=None,
+    parser.add_argument("--model", choices=list(CORTEX_M_MODELS.keys()) + ["trivial", "generic"], default=None,
                         help="overrides timing.model")
     args = parser.parse_args()
 
