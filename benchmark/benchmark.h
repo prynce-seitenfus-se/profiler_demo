@@ -9,34 +9,45 @@ extern "C" {
 #endif
 
 /**
- * @brief Category A: Exact 100-cycle Cortex-M0+ execution workload.
+ * @brief Category A: Millisecond delay utility.
  *
- * Mathematically proven: 1 MOV (1 cyc) + 97 NOPs (97 cyc) + BX LR (2 cyc) = 100 cycles.
- * Static WCET under OTAWA m0plus model: 100 cycles.
+ * Delays execution for the specified number of milliseconds.
  *
- * @return Constant 0.
+ * @param[in] ms Number of milliseconds to delay.
  */
-uint32_t bench_exact_100_cycles(void);
+void bench_delay_ms(uint32_t ms);
 
 /**
- * @brief Category A: Exact 500-cycle Cortex-M0+ execution workload.
- *
- * Mathematically proven: 1 MOV (1 cyc) + 497 NOPs (497 cyc) + BX LR (2 cyc) = 500 cycles.
- * Static WCET under OTAWA m0plus model: 500 cycles.
- *
- * @return Constant 0.
+ * @brief Runs the instrumented, file-local LED heartbeat benchmark.
  */
-uint32_t bench_exact_500_cycles(void);
+void bench_update_user_led(void);
 
 /**
- * @brief Category A: Exact 1000-cycle Cortex-M0+ execution workload.
+ * @brief Category A: Cortex-M0+ workload with an exact 100-cycle assembly body.
  *
- * Mathematically proven: 1 MOV (1 cyc) + 997 NOPs (997 cyc) + BX LR (2 cyc) = 1000 cycles.
- * Static WCET under OTAWA m0plus model: 1000 cycles.
+ * The instrumentable C wrapper calls the assembly body. Profiler measurements include
+ * the wrapper and assembly-call overhead; only the assembly body is exactly 100 cycles.
  *
- * @return Constant 0.
  */
-uint32_t bench_exact_1000_cycles(void);
+void bench_exact_100_cycles(void);
+
+/**
+ * @brief Category A: Cortex-M0+ workload with an exact 500-cycle assembly body.
+ *
+ * The instrumentable C wrapper calls the assembly body. Profiler measurements include
+ * the wrapper and assembly-call overhead; only the assembly body is exactly 500 cycles.
+ *
+ */
+void bench_exact_500_cycles(void);
+
+/**
+ * @brief Category A: Cortex-M0+ workload with an exact 1000-cycle assembly body.
+ *
+ * The instrumentable C wrapper calls the assembly body. Profiler measurements include
+ * the wrapper and assembly-call overhead; only the assembly body is exactly 1000 cycles.
+ *
+ */
+void bench_exact_1000_cycles(void);
 
 /**
  * @brief Category B: Unrolled 10th-order polynomial evaluation using Horner's method.

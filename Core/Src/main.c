@@ -59,35 +59,10 @@
 /* Private function prototypes -----------------------------------------------*/
 void SystemClock_Config(void);
 /* USER CODE BEGIN PFP */
-static void update_user_led(void);
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
-static void update_user_led(void)
-{
-    PROFILER_FUNCTION();
-
-    /* Calm, periodic double-pulse heartbeat every 1000ms:
-     * Step 0: ON  (80ms)
-     * Step 1: OFF (120ms)
-     * Step 2: ON  (80ms)
-     * Step 3: OFF (720ms) */
-    static uint32_t s_last_toggle = 0U;
-    static uint8_t s_step = 0U;
-    const uint32_t now = HAL_GetTick();
-    const uint32_t step_delays[4] = { 80U, 120U, 80U, 720U };
-
-    if ((now - s_last_toggle) >= step_delays[s_step % 4U]) {
-        s_last_toggle = now;
-        s_step = (uint8_t)((s_step + 1U) % 4U);
-        if ((s_step == 1U) || (s_step == 3U)) {
-            HAL_GPIO_WritePin(LED_GREEN_GPIO_Port, LED_GREEN_Pin, GPIO_PIN_SET);
-        } else {
-            HAL_GPIO_WritePin(LED_GREEN_GPIO_Port, LED_GREEN_Pin, GPIO_PIN_RESET);
-        }
-    }
-}
 /* USER CODE END 0 */
 
 /**
@@ -150,21 +125,25 @@ int main(void)
     };
 
     const uint32_t crit_state = profiler_port_enter_critical();
-    PROFILER_SCOPE(bench_exact_100_cycles, bench_exact_100_cycles());
-    PROFILER_SCOPE(bench_exact_500_cycles, bench_exact_500_cycles());
-    PROFILER_SCOPE(bench_exact_1000_cycles, bench_exact_1000_cycles());
-    PROFILER_SCOPE(bench_unrolled_poly32, bench_unrolled_poly32(3U));
-    PROFILER_SCOPE(bench_matrix_mul_2x2, bench_matrix_mul_2x2(mat_a, mat_b, mat_out));
-    PROFILER_SCOPE(bench_fixed_loop_sum, bench_fixed_loop_sum(25U));
-    PROFILER_SCOPE(bench_crc8_fixed_block, bench_crc8_fixed_block(crc_data, sizeof(crc_data)));
+
+	/* benchmark with assembly bodies */
+    bench_exact_100_cycles();
+    bench_exact_500_cycles();
+    bench_exact_1000_cycles();
+
+	/* benchmark with C implementations */
+    (void)bench_unrolled_poly32(3U);
+    bench_matrix_mul_2x2(mat_a, mat_b, mat_out);
+    (void)bench_fixed_loop_sum(25U);
+    (void)bench_crc8_fixed_block(crc_data, sizeof(crc_data));
+
     profiler_port_exit_critical(crit_state);
 
-    (void)mat_out;
+	/* Benchmark user LED heartbeat */
+    bench_update_user_led();
 
-    /* Update status LED heartbeat */
-    update_user_led();
-
-    HAL_Delay(5);
+	/* Computed as idle time */
+	HAL_Delay(5U);
   }
   /* USER CODE END 3 */
 }

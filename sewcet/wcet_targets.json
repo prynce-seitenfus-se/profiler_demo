@@ -1,7 +1,7 @@
 {
     "schema_version": 1,
     "description": "OTAWA static WCET targets for profiler_demo on STM32G070RB",
-    "elf": "../build/Measure/profiler_demo.elf",
+    "elf": "../build/Debug/profiler_demo.elf",
     "output_csv": "1mw.csv",
     "comparison_csv": "comparison_measure.csv",
     "captures": {
@@ -20,61 +20,65 @@
             "taken_branch_penalty": 1
         }
     },
+    "instrumentation": {
+        "include_profiler_hooks": false,
+        "hooks": ["__cyg_profile_func_enter", "__cyg_profile_func_exit"],
+        "notes": "Benchmark functions have no instrumented child calls, and the profiler subtracts the outer hook overhead from recorded durations. Exclude the hooks via nocall so static WCET matches measured function execution."
+    },
     "flow_facts": {
         "loops": [
             {
                 "function": "bench_fixed_loop_sum",
-                "offset": "0x1c",
+                "offset": "0x2a",
                 "bound": 25,
-                "reason": "Loop counts down from count = 25 to 0."
+                "reason": "Instrumented build: loop counts down from count = 25 to 0."
             },
             {
                 "function": "bench_crc8_fixed_block",
-                "offset": "0x76",
+                "offset": "0x84",
                 "bound": 8,
-                "reason": "Inner bit loop runs 8 iterations per byte."
+                "reason": "Instrumented build: inner bit loop runs 8 iterations per byte."
             },
             {
                 "function": "bench_crc8_fixed_block",
-                "offset": "0x86",
+                "offset": "0x94",
                 "bound": 16,
-                "reason": "Outer byte loop runs 16 iterations over 16-byte buffer."
+                "reason": "Instrumented build: outer byte loop runs 16 iterations over 16-byte buffer."
             }
         ]
     },
     "functions": [
         {
             "name": "bench_exact_100_cycles",
-            "call_site_overhead_cycles": 4,
-            "reason": "Exact 100-cycle assembly workload composed with 4-cycle call-site BL probe overhead."
+            "reason": "Instrumented C wrapper measures the exact 100-cycle assembly body plus wrapper and assembly-call overhead."
         },
         {
             "name": "bench_exact_500_cycles",
-            "call_site_overhead_cycles": 4,
-            "reason": "Exact 500-cycle assembly workload composed with 4-cycle call-site BL probe overhead."
+            "reason": "Instrumented C wrapper measures the exact 500-cycle assembly body plus wrapper and assembly-call overhead."
         },
         {
             "name": "bench_exact_1000_cycles",
-            "call_site_overhead_cycles": 4,
-            "reason": "Exact 1000-cycle assembly workload composed with 4-cycle call-site BL probe overhead."
+            "reason": "Instrumented C wrapper measures the exact 1000-cycle assembly body plus wrapper and assembly-call overhead."
         },
         {
             "name": "bench_unrolled_poly32",
-            "call_site_overhead_cycles": 4,
-            "reason": "Unrolled 10th-order polynomial composed with parameter setup & BL call overhead."
+            "reason": "GCC function hooks measure the unrolled polynomial function."
         },
         {
             "name": "bench_matrix_mul_2x2",
-            "call_site_overhead_cycles": 9,
-            "reason": "2x2 matrix multiplication composed with 3-pointer parameter passing overhead."
+            "reason": "GCC function hooks measure the 2x2 matrix multiplication function."
         },
         {
             "name": "bench_fixed_loop_sum",
-            "call_site_overhead_cycles": 4,
-            "reason": "Bounded countdown loop summation composed with call overhead."
+            "reason": "GCC function hooks measure the bounded countdown loop function."
         },
         {
-            "name": "bench_crc8_fixed_block"
+            "name": "bench_crc8_fixed_block",
+            "reason": "GCC function hooks measure the bounded CRC-8 calculation."
+        },
+        {
+            "name": "bench_update_user_led",
+            "reason": "GCC function hooks measure the periodic user LED heartbeat."
         }
     ]
 }

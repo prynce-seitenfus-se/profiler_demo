@@ -6,10 +6,7 @@
             "hidden": true,
             "generator": "Ninja",
             "binaryDir": "${sourceDir}/build/${presetName}",
-            "toolchainFile": "${sourceDir}/cmake/gcc-arm-none-eabi.cmake",
-            "cacheVariables": {
-                "PROFILER_APP_TIME_MODE": "ACTIVE"
-            }
+            "toolchainFile": "${sourceDir}/cmake/gcc-arm-none-eabi.cmake"
         },
         {
             "name": "Debug",
@@ -33,8 +30,7 @@
             "name": "Measure",
             "inherits": "Debug",
             "cacheVariables": {
-                "PROFILER_APP_SCOPES": "ON",
-                "PROFILER_APP_INSTRUMENTED": "OFF"
+                "PROFILER_APP_INSTRUMENTED": "ON"
             }
         }
     ],

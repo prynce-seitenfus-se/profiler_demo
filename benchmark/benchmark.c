@@ -1,8 +1,56 @@
-/*
- * Category B & C: Deterministic C99 benchmark algorithms for WCET validation.
- */
+/* Deterministic C99 benchmark workloads for WCET validation. */
 
 #include "benchmark.h"
+
+#include "gpio.h"
+#include "main.h"
+
+extern void bench_exact_100_cycles_asm(void);
+extern void bench_exact_500_cycles_asm(void);
+extern void bench_exact_1000_cycles_asm(void);
+
+void bench_delay_ms(uint32_t ms)
+{
+    HAL_Delay(ms);
+}
+
+void bench_update_user_led(void)
+{
+    /* Calm, periodic double-pulse heartbeat every 1000ms:
+     * Step 0: ON  (80ms)
+     * Step 1: OFF (120ms)
+     * Step 2: ON  (80ms)
+     * Step 3: OFF (720ms) */
+    static uint32_t s_last_toggle = 0U;
+    static uint8_t s_step = 0U;
+    const uint32_t now = HAL_GetTick();
+    const uint32_t step_delays[4] = { 80U, 120U, 80U, 720U };
+
+    if ((now - s_last_toggle) >= step_delays[s_step % 4U]) {
+        s_last_toggle = now;
+        s_step = (uint8_t)((s_step + 1U) % 4U);
+        if ((s_step == 1U) || (s_step == 3U)) {
+            HAL_GPIO_WritePin(LED_GREEN_GPIO_Port, LED_GREEN_Pin, GPIO_PIN_SET);
+        } else {
+            HAL_GPIO_WritePin(LED_GREEN_GPIO_Port, LED_GREEN_Pin, GPIO_PIN_RESET);
+        }
+    }
+}
+
+void bench_exact_100_cycles(void)
+{
+    bench_exact_100_cycles_asm();
+}
+
+void bench_exact_500_cycles(void)
+{
+    bench_exact_500_cycles_asm();
+}
+
+void bench_exact_1000_cycles(void)
+{
+    bench_exact_1000_cycles_asm();
+}
 
 uint32_t bench_unrolled_poly32(uint32_t x)
 {

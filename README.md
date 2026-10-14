@@ -21,7 +21,7 @@ it is 16 MHz with the current clock configuration.
 
 The CMake project expects `arm-none-eabi-gcc`, CMake, and Ninja to be available. It uses
 the sibling repositories `..\profiler`, `..\stream`, and `..\hashmap` by default. Configure
-and build the scope-based measurement preset from this directory:
+and build the compiler-instrumented measurement preset from this directory:
 
 ```powershell
 cmake --preset Measure
@@ -29,34 +29,29 @@ cmake --build --preset Measure
 ```
 
 The presets use `cmake/gcc-arm-none-eabi.cmake` for the Cortex-M0+ target. `Debug` and
-`Release` select the same timer and transport but leave application probes disabled by
-default. `Measure` enables explicit call-site scopes in the demo while leaving compiler
-function instrumentation off.
+`Release` select the same timer and transport but leave application instrumentation disabled.
+`Measure` enables GCC function instrumentation for the benchmark C source.
 
 The app's CMake options are:
 
 | Option | Effect |
 |---|---|
-| `PROFILER_APP_SCOPES` | Enable explicit `PROFILER_SCOPE` and `PROFILER_FUNCTION` probes. |
-| `PROFILER_APP_INSTRUMENTED` | Compile `benchmark_algo.c` with GCC function instrumentation. |
+| `PROFILER_APP_INSTRUMENTED` | Compile benchmark functions with GCC function instrumentation. |
 
-`PROFILER_APP_SCOPES` and `PROFILER_APP_INSTRUMENTED` are mutually exclusive. To configure
-a compiler-instrumented build, for example:
+To configure a compiler-instrumented build, for example:
 
 ```powershell
 cmake --preset Debug -DPROFILER_APP_INSTRUMENTED=ON
 cmake --build --preset Debug
 ```
 
-The CMake project also accepts `PROFILER_APP_TIME_MODE`, but the current profiler core
-records active cycles and marks PROF-BIN dumps as active regardless of that setting.
-
-The demo places call-site scopes around the three exact-cycle assembly routines and the
-four C benchmark routines. The LED heartbeat function is also measured when scope support
-is enabled. The assembly functions in `benchmark/Src/benchmark_exact.s` provide
-100-, 500-, and 1000-cycle Cortex-M0+ workloads under the stated zero-wait-state model;
-the C workloads cover an unrolled polynomial, 2x2 matrix multiplication, a bounded sum,
-and CRC-8 over a fixed block.
+The main loop runs the numeric workloads in a critical section. In the `Measure` preset,
+the C benchmarks and LED heartbeat are measured by GCC entry/exit hooks. The three
+exact-cycle assembly bodies are called through instrumented C wrappers so they also produce
+metrics; those measurements cover the wrapper and assembly body, while the assembly bodies
+themselves remain 100, 500, and 1000 cycles under the stated zero-wait-state model. The
+heartbeat appears as `bench_update_user_led`, along with its
+`benchmark_update_user_led` call-through; application startup remains uninstrumented.
 
 ## Run and interact
 
@@ -116,3 +111,5 @@ The wrapper uses the external `sewcet` tools in `..\..\sewcet`, or the directory
 `SEWCET_DIR`. The default config points to `build\Measure\profiler_demo.elf`, writes
 `sewcet\1mw.csv`, and compares estimates with the captured target data in `1m.csv`;
 override the ELF or model with `-Elf` and `-Model` when needed.
+Refresh `1m.csv` from a new instrumented target capture before comparing; the existing local
+capture was produced by the removed scope-based measurement path.

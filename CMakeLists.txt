@@ -21,10 +21,6 @@ project(${CMAKE_PROJECT_NAME})
 message("Build type: " ${CMAKE_BUILD_TYPE})
 
 option(PROFILER_APP_INSTRUMENTED "Instrument selected application files" OFF)
-option(PROFILER_APP_SCOPES "Measure selected call sites with explicit profiler scopes (no instrumentation)" OFF)
-if(PROFILER_APP_INSTRUMENTED AND PROFILER_APP_SCOPES)
-    message(FATAL_ERROR "PROFILER_APP_INSTRUMENTED and PROFILER_APP_SCOPES are mutually exclusive")
-endif()
 
 # Enable CMake support for ASM and C languages
 enable_language(C ASM)
@@ -60,14 +56,14 @@ target_link_libraries(profiler PRIVATE stm32cubemx)
 # Add sources to executable
 target_sources(${CMAKE_PROJECT_NAME} PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}/Core/Src/profiler_port.c"
-    "${CMAKE_CURRENT_SOURCE_DIR}/benchmark/Src/benchmark_exact.s"
-    "${CMAKE_CURRENT_SOURCE_DIR}/benchmark/Src/benchmark_algo.c"
+    "${CMAKE_CURRENT_SOURCE_DIR}/benchmark/benchmark.s"
+    "${CMAKE_CURRENT_SOURCE_DIR}/benchmark/benchmark.c"
 )
 
 # Add include paths
 target_include_directories(${CMAKE_PROJECT_NAME} PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}/Core/Inc"
-    "${CMAKE_CURRENT_SOURCE_DIR}/benchmark/Inc"
+    "${CMAKE_CURRENT_SOURCE_DIR}/benchmark"
 )
 
 # Add project symbols (macros)
@@ -84,27 +80,10 @@ target_link_libraries(${CMAKE_PROJECT_NAME}
     stm32cubemx
 )
 
-# Profiler duration semantics: ACTIVE (CPU time only, default) or WALL
-set(PROFILER_APP_TIME_MODE "ACTIVE" CACHE STRING "Profiler time mode (WALL or ACTIVE)")
-set_property(CACHE PROFILER_APP_TIME_MODE PROPERTY STRINGS WALL ACTIVE)
-if(PROFILER_APP_TIME_MODE STREQUAL "ACTIVE")
-    target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE PROFILER_APP_TIME_MODE=1)
-elseif(PROFILER_APP_TIME_MODE STREQUAL "WALL")
-    target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE PROFILER_APP_TIME_MODE=0)
-else()
-    message(FATAL_ERROR "PROFILER_APP_TIME_MODE must be WALL or ACTIVE")
-endif()
-
-# Explicit call-site scopes: uninstrumented code, same binary as the WCET analysis.
-if(PROFILER_APP_SCOPES)
-    target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE PROFILER_SCOPES_ENABLED)
-endif()
-
-# Instrument application files for function call tracing.
+# Instrument the C benchmark functions with the profiler's compiler hooks.
 if(PROFILER_APP_INSTRUMENTED)
-    target_compile_definitions(${CMAKE_PROJECT_NAME} PRIVATE PROFILER_APP_INSTRUMENTED)
     set_source_files_properties(
-        "${CMAKE_CURRENT_SOURCE_DIR}/benchmark/Src/benchmark_algo.c"
+        "${CMAKE_CURRENT_SOURCE_DIR}/benchmark/benchmark.c"
         PROPERTIES COMPILE_OPTIONS "-finstrument-functions"
     )
 endif()

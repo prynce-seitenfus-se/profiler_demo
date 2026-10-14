@@ -16,8 +16,6 @@ if /i "%~1"=="-h" goto :show_help
 if /i "%~1"=="--help" goto :show_help
 if /i "%~1"=="debug" goto :parse_debug
 if /i "%~1"=="release" goto :parse_release
-if /i "%~1"=="measure" goto :parse_measure
-if /i "%~1"=="-m" goto :parse_measure_flag
 echo [ERROR] Unknown option: %~1
 goto :invalid_args
 
@@ -38,16 +36,6 @@ goto :parse_args
 
 :parse_release
 set "BUILD_CONFIG=Release"
-shift
-goto :parse_args
-
-:parse_measure
-set "BUILD_CONFIG=Measure"
-shift
-goto :parse_args
-
-:parse_measure_flag
-set "BUILD_CONFIG=Measure"
 shift
 goto :parse_args
 
@@ -88,9 +76,9 @@ if errorlevel 1 (
 
 echo [CONFIGURE] %BUILD_CONFIG% build; instrumented=%INSTRUMENTED%
 if "%INSTRUMENTED%"=="ON" (
-    cmake --preset %BUILD_CONFIG% -DPROFILER_APP_INSTRUMENTED=ON -DPROFILER_APP_SCOPES=OFF
+    cmake --preset %BUILD_CONFIG% -DPROFILER_APP_INSTRUMENTED=ON
 ) else (
-    cmake --preset %BUILD_CONFIG%
+    cmake --preset %BUILD_CONFIG% -DPROFILER_APP_INSTRUMENTED=OFF
 )
 if errorlevel 1 goto :build_error
 
@@ -111,15 +99,13 @@ exit /b 0
 
 :show_help
 echo.
-echo Usage: build.bat [Debug^|Release^|Measure] [-c] [-i] [-m]
+echo Usage: build.bat [Debug^|Release] [-c] [-i]
 echo.
 echo Options:
 echo   Debug          Build the Debug preset (default)
 echo   Release        Build the Release preset
-echo   Measure        Build the Measure preset (uninstrumented, scoped)
 echo   -c             Clean the selected preset outputs before building
-echo   -i             Instrument benchmark sources (-finstrument-functions)
-echo   -m             Select Measure preset
+echo   -i             Instrument benchmark functions (-finstrument-functions)
 echo   -h             Show this help
 echo.
 popd
