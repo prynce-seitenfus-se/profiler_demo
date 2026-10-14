@@ -1,0 +1,24 @@
+{
+    "schema_version": 1,
+    "timing": {
+        "cpu_clock_hz": 16000000,
+        "model": "m0plus"
+    },
+    "loops": {
+        "bench_fixed_loop_sum": 25,
+        "bench_crc8_fixed_block": [
+            16,
+            8
+        ]
+    },
+    "functions": [
+        "bench_update_user_led",
+        "bench_exact_100_cycles",
+        "bench_exact_500_cycles",
+        "bench_exact_1000_cycles",
+        "bench_unrolled_poly32",
+        "bench_matrix_mul_2x2",
+        "bench_fixed_loop_sum",
+        "bench_crc8_fixed_block"
+    ]
+}

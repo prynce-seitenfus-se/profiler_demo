@@ -5,8 +5,9 @@
 .DESCRIPTION
     Connects to a specified serial COM port and provides an interactive
     terminal console with a fixed '> ' prompt, command history recall,
-    and built-in console utilities (help, clear, comm). All other commands
-    are forwarded directly to the application/target.
+    and built-in console utilities (help, clear, comm).
+    Use prof-dump > <file>.bin inside the console to save raw profiler telemetry.
+    All other commands are forwarded directly to the application/target.
 
 .PARAMETER PortName
     Serial COM port (e.g. COM3). Mandatory input matching COM<X>.
@@ -123,6 +124,104 @@ $stopShort = switch ($StopBits) {
     default        { '1' }
 }
 
+function Read-ProfilerBytes($SerialPort, [int]$Length, [DateTime]$Deadline)
+{
+    $buffer = New-Object byte[] $Length
+    $offset = 0
+    while ($offset -lt $Length -and [DateTime]::UtcNow -lt $Deadline) {
+        try {
+            $read = $SerialPort.Read($buffer, $offset, $Length - $offset)
+            if ($read -gt 0) {
+                $offset += $read
+            }
+        }
+        catch [System.TimeoutException] {
+            # Serial reads time out briefly while waiting for the rest of the packet.
+        }
+    }
+    if ($offset -ne $Length) {
+        throw "Incomplete profiler dump: received $offset of $Length expected bytes."
+    }
+    return ,$buffer
+}
+
+function Save-ProfilerDump($SerialPort, [string]$OutputFile, [byte[]]$CommandBytes)
+{
+    $outputPath = if ([System.IO.Path]::IsPathRooted($OutputFile)) {
+        [System.IO.Path]::GetFullPath($OutputFile)
+    } else {
+        [System.IO.Path]::GetFullPath((Join-Path (Get-Location).ProviderPath $OutputFile))
+    }
+
+    $SerialPort.DiscardInBuffer()
+    $SerialPort.Write($CommandBytes, 0, $CommandBytes.Length)
+    $deadline = [DateTime]::UtcNow.AddSeconds(30)
+    $magicWindow = New-Object 'System.Collections.Generic.Queue[byte]'
+    $magicFound = $false
+    while (-not $magicFound -and [DateTime]::UtcNow -lt $deadline) {
+        try {
+            $nextByte = $SerialPort.ReadByte()
+            if ($nextByte -lt 0) {
+                throw 'Serial connection closed before the profiler dump started.'
+            }
+            if ($magicWindow.Count -eq 4) {
+                $null = $magicWindow.Dequeue()
+            }
+            $magicWindow.Enqueue([byte]$nextByte)
+            if ($magicWindow.Count -eq 4) {
+                $window = $magicWindow.ToArray()
+                $magicFound = ($window[0] -eq 0x50) -and ($window[1] -eq 0x52) -and
+                              ($window[2] -eq 0x4F) -and ($window[3] -eq 0x46)
+            }
+        }
+        catch [System.TimeoutException] {
+            # Ignore per-read timeouts until the overall response deadline.
+        }
+    }
+    if (-not $magicFound) {
+        throw 'Timeout waiting for the PROF-BIN header.'
+    }
+
+    $headerTail = Read-ProfilerBytes $SerialPort 12 $deadline
+    $header = [byte[]](@(0x50, 0x52, 0x4F, 0x46) + $headerTail)
+    $version = [System.BitConverter]::ToUInt16($header, 4)
+    $recordCount = [System.BitConverter]::ToUInt16($header, 6)
+    $headerLength = switch ($version) { 2 { 16 } 3 { 24 } 4 { 28 } default { 0 } }
+    if ($headerLength -eq 0) {
+        throw "Unsupported PROF-BIN version: $version."
+    }
+    $packetLength = $headerLength + (24 * $recordCount) + 4
+    $deadline = [DateTime]::UtcNow.AddSeconds(30 + [Math]::Ceiling($packetLength * 12.0 / $SerialPort.BaudRate))
+    $packetTail = Read-ProfilerBytes $SerialPort ($packetLength - 16) $deadline
+    $packet = [byte[]]($header + $packetTail)
+
+    [uint32]$crc = 4294967295
+    for ($i = 0; $i -lt $packet.Length - 4; $i++) {
+        $crc = $crc -bxor $packet[$i]
+        for ($bit = 0; $bit -lt 8; $bit++) {
+            if (($crc -band 1) -ne 0) {
+                $crc = ($crc -shr 1) -bxor [uint32]0xEDB88320L
+            } else {
+                $crc = $crc -shr 1
+            }
+        }
+    }
+    $crc = $crc -bxor [uint32]4294967295
+    if ($crc -ne [System.BitConverter]::ToUInt32($packet, $packet.Length - 4)) {
+        throw 'Profiler dump CRC32 mismatch; no file was saved.'
+    }
+
+    [void][System.IO.Directory]::CreateDirectory([System.IO.Path]::GetDirectoryName($outputPath))
+    $outputStream = [System.IO.File]::Open($outputPath, [System.IO.FileMode]::Create, [System.IO.FileAccess]::Write)
+    try {
+        $outputStream.Write($packet, 0, $packet.Length)
+    }
+    finally {
+        $outputStream.Dispose()
+    }
+    Write-Host "Saved PROF-BIN v$version dump: $outputPath ($recordCount records, $packetLength bytes)" -ForegroundColor Green
+}
+
 function Show-BuiltinHelp
 {
     Write-Host "`nBuilt-in console commands:" -ForegroundColor Cyan
@@ -130,6 +229,7 @@ function Show-BuiltinHelp
     Write-Host "  clear, cls        Clear console screen"
     Write-Host "  comm, info        Show serial communication settings"
     Write-Host "  exit, quit        Disconnect and exit (or press Ctrl+C / Ctrl+Q)"
+    Write-Host "  prof-dump > <file>.bin   Save binary telemetry (overwrites existing file)"
     Write-Host "`nTarget profiler commands:" -ForegroundColor Cyan
     Write-Host "  prof-help, prof-top, prof-dump, prof-reset, prof-status`n" -ForegroundColor DarkGray
 }
@@ -261,6 +361,25 @@ try {
                     elseif ($command -in @('exit', 'quit', '/exit', '/quit')) {
                         $running = $false
                         break
+                    }
+                    elseif ($command -match '^prof-dump\s*>') {
+                        try {
+                            if ($command -notmatch '^prof-dump\s*>\s*(?:"([^"]+)"|''([^'']+)''|([^"''<>\s]+))\s*$') {
+                                throw 'Usage: prof-dump > <file>.bin (quote paths containing spaces).'
+                            }
+                            $outputFile = if ($Matches[1]) { $Matches[1] } elseif ($Matches[2]) { $Matches[2] } else { $Matches[3] }
+                            if ($null -ne $logStream) {
+                                $logStream.WriteLine(">> " + $command)
+                                $logStream.Flush()
+                            }
+                            $cmdBytes = $encoding.GetBytes('prof-dump' + $lineEnding)
+                            Save-ProfilerDump $port $outputFile $cmdBytes
+                        }
+                        catch {
+                            Write-Host "Dump export error: $_" -ForegroundColor Red
+                        }
+                        [Console]::Write($prompt)
+                        $promptVisible = $true
                     }
                     else {
                         # All other commands are forwarded directly to the application
