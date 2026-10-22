@@ -2,7 +2,6 @@
 .SYNOPSIS
     Runs the sewcet WCET extraction or CSV comparison.
 .DESCRIPTION
-    Thin wrapper around <sewcet>/wcet/run_wcet.ps1.
     - Pass -Elf (-e) to generate the static WCET CSV (and optionally -Compare/-cmp to compare).
     - Pass -Compare (-cmp) with two CSV files (without -Elf) to only run the comparison.
 .EXAMPLE
@@ -13,6 +12,8 @@
 #>
 [CmdletBinding()]
 param(
+    [string]$Config,
+
     [Alias('e')]
     [string]$Elf,
 
@@ -24,6 +25,8 @@ param(
 
     [ValidateSet('m0', 'm0plus', 'm23', 'm3', 'm4', 'm33', 'm7', 'trivial', 'generic')]
     [string]$Model,
+
+    [switch]$WcetOnly,
 
     [Parameter(Position = 0, ValueFromRemainingArguments = $true)]
     [string[]]$ExtraArgs
@@ -78,19 +81,22 @@ if ($Compare) {
     }
 }
 
+$configPath = if ($Config) { Resolve-CallerPath $Config } else { Join-Path $PSScriptRoot 'wcet_targets.json' }
+$wcetOnlyFlag = ($WcetOnly.IsPresent -or ([bool]$Elf -and ($resolvedCompare.Count -eq 0)))
+
 $sewcet = if ($env:SEWCET_DIR) { $env:SEWCET_DIR } else { Join-Path $PSScriptRoot '..\..\sewcet' }
 $tool = Join-Path $sewcet 'wcet\run_wcet.ps1'
 if (-not (Test-Path -LiteralPath $tool)) {
     $tool = Join-Path $sewcet 'tools\run_wcet.ps1'
 }
 
-$configPath = Join-Path $PSScriptRoot 'wcet_targets.json'
-$wcetOnly = ([bool]$Elf -and ($resolvedCompare.Count -eq 0))
+$selfPath = [System.IO.Path]::GetFullPath($PSCommandPath)
+$toolFull = if (Test-Path -LiteralPath $tool) { [System.IO.Path]::GetFullPath($tool) } else { "" }
 
-if (Test-Path -LiteralPath $tool) {
+if ($toolFull -and ($toolFull -ne $selfPath)) {
     $toolArgs = @{
         Config   = $configPath
-        WcetOnly = $wcetOnly
+        WcetOnly = $wcetOnlyFlag
     }
     if ($Elf) { $toolArgs.Elf = Resolve-CallerPath $Elf }
     if ($Out) { $toolArgs.Out = Resolve-CallerPath $Out }
@@ -115,7 +121,7 @@ $wslArgs = @('-e', 'env')
 if ($Elf) {
     $wslArgs += "ELF=$(ConvertTo-WslPath (Resolve-CallerPath $Elf))"
 }
-if ($wcetOnly) {
+if ($wcetOnlyFlag) {
     $wslArgs += "WCET_ONLY=1"
 }
 if (-not $Elf -and $resolvedCompare.Count -ge 2) {

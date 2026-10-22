@@ -6,6 +6,10 @@ Settings and justified flow facts are stored in `wcet\wcet_targets.json`.
 > **Configuration warning:** The checked-in checksum and flow-fact offsets predate
 > the latest profiler sync. Refresh them before relying on the WCET results.
 
+The project [WCET Tool Validation report](../../../bb/hr/fusa/docs/reference/markdown/wcet_tool_validation.md)
+assesses these benchmark records as validation inputs. Historical comparisons
+do not automatically validate the application Cortex-M33 timing model.
+
 ## Usage
 
 Run commands from the project root and replace `<project>` with the firmware name.
