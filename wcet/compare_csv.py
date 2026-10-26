@@ -3,6 +3,7 @@
 
 import argparse
 import csv
+import importlib.util
 import json
 import sys
 from pathlib import Path
@@ -28,7 +29,86 @@ def read_csv(path: Path) -> dict:
         return {}
     with path.open("r", newline="", encoding="utf-8-sig") as f:
         reader = csv.DictReader(f)
-        return {row["function"].strip(): row for row in reader if row.get("function")}
+        rows = {}
+        for row in reader:
+            fn = row.get("function", "").strip()
+            if not fn:
+                continue
+            if fn in rows:
+                existing = rows[fn]
+                calls = int(existing.get("calls", 0) or 0) + int(row.get("calls", 0) or 0)
+                total = int(existing.get("total_cycles", 0) or 0) + int(row.get("total_cycles", 0) or 0)
+                min_c = min(int(existing.get("min_cycles", 0) or 0), int(row.get("min_cycles", 0) or 0))
+                max_c = max(int(existing.get("max_cycles", 0) or 0), int(row.get("max_cycles", 0) or 0))
+                avg_cyc = (total / calls) if calls > 0 else 0.0
+                rows[fn] = {
+                    **row,
+                    "function": fn,
+                    "calls": str(calls),
+                    "total_cycles": str(total),
+                    "min_cycles": str(min_c),
+                    "max_cycles": str(max_c),
+                    "avg_cycles": f"{avg_cyc:.1f}",
+                }
+            else:
+                rows[fn] = row
+        return rows
+
+
+def load_prof_dump_parser():
+    here = Path(__file__).resolve().parent
+    for candidate in (
+        here / "parse_prof_dump.py",
+        here.parent.parent / "profiler" / "parse_prof_dump.py",
+    ):
+        if candidate.is_file():
+            spec = importlib.util.spec_from_file_location("parse_prof_dump", candidate)
+            mod = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(mod)
+            return mod
+    raise RuntimeError("parse_prof_dump.py not found")
+
+
+def read_measured_input(path: Path, elf: Path = None, addr2line: str = "arm-none-eabi-addr2line") -> dict:
+    if not path or not path.is_file():
+        return {}
+    with path.open("rb") as f:
+        magic = f.read(4)
+    if path.suffix.lower() == ".bin" or magic == b"PROF":
+        parser_mod = load_prof_dump_parser()
+        header, records, _ = parser_mod.read_binary_dump(path)
+        addresses = [r.fn_address for r in records]
+        symbols = parser_mod.resolve_symbols(addresses, elf, addr2line)
+        rows = {}
+        for r in records:
+            fn_name = symbols.get(r.fn_address, (f"0x{r.fn_address:08x}", ""))[0]
+            if fn_name in rows:
+                existing = rows[fn_name]
+                calls = int(existing["calls"]) + r.call_count
+                total = int(existing["total_cycles"]) + r.total_cycles
+                min_c = min(int(existing["min_cycles"]), r.min_cycles)
+                max_c = max(int(existing["max_cycles"]), r.max_cycles)
+                avg_cyc = (total / calls) if calls > 0 else 0.0
+                rows[fn_name] = {
+                    "function": fn_name,
+                    "calls": str(calls),
+                    "total_cycles": str(total),
+                    "min_cycles": str(min_c),
+                    "max_cycles": str(max_c),
+                    "avg_cycles": f"{avg_cyc:.1f}",
+                }
+            else:
+                avg_cyc = (r.total_cycles / r.call_count) if r.call_count > 0 else 0.0
+                rows[fn_name] = {
+                    "function": fn_name,
+                    "calls": str(r.call_count),
+                    "total_cycles": str(r.total_cycles),
+                    "min_cycles": str(r.min_cycles),
+                    "max_cycles": str(r.max_cycles),
+                    "avg_cycles": f"{avg_cyc:.1f}",
+                }
+        return rows
+    return read_csv(path)
 
 
 def to_float(val):
@@ -62,28 +142,53 @@ def is_unbounded(row: dict, work_dir: Path, fn: str) -> bool:
     return False
 
 
-def main():
-    parser = argparse.ArgumentParser(description="Compare two profiler / WCET CSV files.")
-    parser.add_argument("file1", nargs="?", type=Path, help="first CSV file (e.g. measured / renode)")
-    parser.add_argument("file2", nargs="?", type=Path, help="second CSV file (e.g. WCET)")
+def main(argv=None):
+    parser = argparse.ArgumentParser(description="Compare profiler measured data against static WCET bounds.")
+    parser.add_argument("file1", nargs="?", type=Path, help="first CSV or PROF-BIN file (e.g. measured / renode)")
+    parser.add_argument("file2", nargs="?", type=Path, help="second CSV file (e.g. static WCET)")
+    parser.add_argument("-d", "--dump", type=Path, help="PROF-BIN binary dump or measured CSV file")
+    parser.add_argument("-e", "--elf", type=Path, help="ELF file for symbol resolution when reading a PROF-BIN dump")
+    parser.add_argument("--addr2line", default="arm-none-eabi-addr2line",
+                        help="addr2line executable for PROF-BIN symbol resolution")
+    parser.add_argument("-w", "--wcet", type=Path, help="static WCET CSV file or WCET JSON configuration")
     parser.add_argument("-o", "--output", type=Path, nargs="?", const=Path("__DEFAULT__"),
                         help="output comparison CSV file (default: wcet_<csv1>_vs_<csv2>.csv beside csv2)")
     parser.add_argument("--all", action="store_true", help="include unmeasured static functions from file2")
+    parser.add_argument("--alarm-pct", type=float, default=80.0, metavar="PCT",
+                        help="mark functions whose measured max reaches PCT%% of the WCET bound as NEAR "
+                             "(0 disables; default: 80)")
+    parser.add_argument("--fail-on-alarm", action="store_true",
+                        help="also exit with status 1 when any function is NEAR its WCET bound")
+    parser.add_argument("--fail-on-unexercised", action="store_true",
+                        help="also exit with status 1 when any static WCET-bounded function has 0 runtime calls")
     parser.add_argument("--config", type=Path, help=argparse.SUPPRESS)
 
-    args = parser.parse_args()
+    raw_argv = list(sys.argv[1:] if argv is None else argv)
+    if raw_argv and raw_argv[0] == "verify":
+        raw_argv = raw_argv[1:]
 
-    file1 = args.file1
+    args = parser.parse_args(raw_argv)
+    if not 0.0 <= args.alarm_pct <= 100.0:
+        parser.error("--alarm-pct must be between 0 and 100")
+
+    file1 = args.dump or args.file1
     file2 = args.file2
     output = args.output
+    config_path = args.config
+
+    if args.wcet:
+        if args.wcet.suffix.lower() == ".json" and not config_path:
+            config_path = args.wcet
+        else:
+            file2 = args.wcet
 
     cfg_functions = {}
     work_dir = None
-    if args.config:
-        with args.config.open("r", encoding="utf-8") as f:
+    if config_path:
+        with config_path.open("r", encoding="utf-8") as f:
             cfg = json.load(f)
         cfg_functions = {f["name"]: f for f in cfg.get("functions", []) if isinstance(f, dict) and "name" in f}
-        base = args.config.resolve().parent
+        base = config_path.resolve().parent
         work_dir = (base / cfg.get("work_dir", "work")).resolve()
         captures = cfg.get("captures", {})
 
@@ -101,6 +206,9 @@ def main():
         if not file2:
             out_csv = cfg.get("output_csv", "1w.csv")
             file2 = (base / out_csv).resolve()
+
+        if not output and cfg.get("comparison_csv"):
+            output = (base / cfg["comparison_csv"]).resolve()
 
     elif file2 and file2.parent.is_dir():
         work_dir = (file2.parent / "work").resolve()
@@ -129,7 +237,11 @@ def main():
     if not output or output == Path("__DEFAULT__"):
         output = (file2.parent / f"wcet_{file1.stem}_vs_{file2.stem}.csv").resolve()
 
-    rows1 = read_csv(file1)
+    try:
+        rows1 = read_measured_input(file1, args.elf, args.addr2line)
+    except Exception as exc:
+        print(f"error: failed to read {file1}: {exc}", file=sys.stderr)
+        return 1
     rows2 = read_csv(file2)
 
     if not rows1:
@@ -229,8 +341,14 @@ def main():
             wcet_check = "NO_WCET"
         else:
             margin = effective_w - m_max
+            # Pessimism factor P = WCET / MeasuredMax
             ratio = (effective_w / float(m_max)) if m_max > 0 else 0.0
-            wcet_check = "SAFE" if margin >= 0 else "EXCEEDED !"
+            if margin < 0:
+                wcet_check = "EXCEEDED !"
+            elif args.alarm_pct > 0.0 and (m_max * 100.0) >= (effective_w * args.alarm_pct):
+                wcet_check = "NEAR !"
+            else:
+                wcet_check = "SAFE"
 
         counts[wcet_check] = counts.get(wcet_check, 0) + 1
 
@@ -320,10 +438,33 @@ def main():
     active_mcyc = total_active_cycles / 1_000_000.0
     print(f"Function Summary:   {active_count} active functions | {total_calls} calls | Active: {active_mcyc:.1f}M cyc")
 
+    # Detect static WCET-bounded functions never exercised at runtime (coverage blind spots)
+    switch_helpers = {
+        f.get("switch_overhead") for f in cfg_functions.values() if f.get("switch_overhead")
+    } - set(cfg_functions.keys())
+    unexercised_fns = []
+    for fn, r2 in rows2.items():
+        if fn in switch_helpers:
+            continue
+        w_val = to_float(r2.get("max_cycles"))
+        if w_val is None:
+            w_val = to_float(r2.get("wcet_cycles"))
+        if w_val is None and not is_unbounded(r2, work_dir, fn):
+            continue
+        r1 = rows1.get(fn)
+        m_calls = to_int(r1.get("calls")) if r1 else None
+        m_max = (to_int(r1.get("max_cycles")) or to_int(r1.get("measured_max"))) if r1 else None
+        if r1 and m_calls is None and m_max is not None:
+            m_calls = 1
+        if not m_calls or m_calls <= 0 or m_max is None:
+            unexercised_fns.append(fn)
+
     safe_n = counts.get("SAFE", 0)
+    near_n = counts.get("NEAR !", 0)
     exceeded_n = counts.get("EXCEEDED !", 0)
     other_parts = [f"{counts[k]} {k}" for k in ("UNBOUNDED", "NO_WCET", "NOT_RUN") if counts.get(k)]
-    check_parts = [f"{safe_n} SAFE", f"{exceeded_n} EXCEEDED"] + other_parts
+    near_label = f"NEAR (>={args.alarm_pct:g}%)" if args.alarm_pct > 0.0 else "NEAR (off)"
+    check_parts = [f"{safe_n} SAFE", f"{near_n} {near_label}", f"{exceeded_n} EXCEEDED"] + other_parts
 
     comparable = [e for e in entries if e["ratio"] is not None]
     if comparable:
@@ -336,6 +477,11 @@ def main():
         )
     else:
         print(f"WCET Check Summary: {' | '.join(check_parts)}")
+    if unexercised_fns:
+        print(
+            f"Unexercised WCET:   {len(unexercised_fns)} static target(s) with 0 calls "
+            f"({', '.join(unexercised_fns)})"
+        )
     print("=" * width)
 
     # Write output CSV if requested
@@ -349,7 +495,13 @@ def main():
         except PermissionError:
             print(f"warning: could not write {output} (file is open in another program)", file=sys.stderr)
 
-    return 1 if exceeded_n > 0 else 0
+    if exceeded_n > 0:
+        return 1
+    if args.fail_on_alarm and near_n > 0:
+        return 1
+    if args.fail_on_unexercised and unexercised_fns:
+        return 1
+    return 0
 
 
 if __name__ == "__main__":
